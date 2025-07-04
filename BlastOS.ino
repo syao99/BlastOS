@@ -23,7 +23,7 @@ implement UI layer
 implement controls layer
 */
 
-
+#define CTWI_USING_BLOCKING_ACCESS
 // 1. Pinout
 // Input
 #define PINREV 11
@@ -40,6 +40,7 @@ implement controls layer
 #define WHEELMINSPEED 1000
 #define WHEELMAXSPEED 2000
 #define MAXVOLTAGE 16.8
+#define DIVIDEDVOLTAGE 5
 #define ENABLEDECAY true
 
 #define SCREEN_ADDR 0x3C
@@ -75,7 +76,7 @@ struct GlobalParams {
   uint8_t maxDPS = 20;
   uint8_t noidOnTime = 25;
   uint8_t compLockProfile = 0;  // 0 disabled, 1/2/3 for corresponding profiles
-  uint16_t voltageThreshold = 100;
+  uint16_t voltageThreshold = 144;
   float decayMultiplier = 0.99f;
   GlobalParams() {}
 };
@@ -108,6 +109,7 @@ struct GlobalState {
   uint8_t currentFiringProfileIndex = 0;
   uint8_t previousFiringProfileIndex = 0;
   UseBootMode useMode;
+  char* bootModeText;
   GlobalState() {}
 };
 struct Haptic {  // for haptics
@@ -358,7 +360,7 @@ struct ScreenMgr {
       sendBlock(0x00, &initCmds[i], 1);
   }
 
-  void updateScreenFromTilemap(const uint8_t tileMap[8][16], const uint8_t (*spriteSheet)[8] = spriteSheet) {
+  void updateScreenFromTilemap(const uint8_t tileMap[8][16], const uint8_t (*spriteSheet)[8]) {
     // reserve 1 byte for SSD1306 control, 1 for nI2C register address
     const uint8_t capacity = CTWI::SIZE_BUFFER - 2;
     for (uint8_t page = 0; page < 8; ++page) {
@@ -390,7 +392,7 @@ struct ScreenMgr {
   }
 
   void updateScreen() {
-    updateScreenFromTilemap(tileMap);
+    updateScreenFromTilemap(tileMap, spriteSheet);
   }
 
   uint8_t charToTileID(char c) {
@@ -451,11 +453,15 @@ struct ScreenMgr {
   // Render a text string at given page, start column:
   void setText(const char* text, uint8_t page, uint8_t startCol) {
     for (uint8_t i = 0; text[i] && startCol + i < COL_COUNT; ++i) {
+      page = constrain(page, 0, ROW_LAST);
+      uint8_t useCol = constrain(startCol + i, 0, COL_LAST);
       tileMap[page][startCol + i] = charToTileID(text[i]);
     }
   }
 
   void setSprite(uint8_t sprite, uint8_t page, uint8_t block) {
+    page = constrain(page, 0, ROW_LAST);
+    block = constrain(block, 0, COL_LAST);
     tileMap[page][block] = sprite;
   }
 
@@ -561,13 +567,13 @@ inline char* numToCharArray(IntType num) {
 }*/
 
 char* concat(const char* a, const char* b) {
-    size_t la = strlen(a);
-    size_t lb = strlen(b);
-    char* result = (char*) malloc(la + lb + 1);
-    if (!result) return nullptr;
-    memcpy(result,       a,  la);
-    memcpy(result + la,  b,  lb + 1);  // copies terminating '\0'
-    return result;
+  size_t la = strlen(a);
+  size_t lb = strlen(b);
+  char* result = (char*)malloc(la + lb + 1);
+  if (!result) return nullptr;
+  memcpy(result, a, la);
+  memcpy(result + la, b, lb + 1);  // copies terminating '\0'
+  return result;
 }
 
 struct UIMgr {
@@ -577,30 +583,29 @@ struct UIMgr {
   GlobalState& globalState;
   UIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState)
     : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) {}
+  initStatus(bool pushToScr = true) {
+    scrMgr.setText(versionText, 0, 2);
+    scrMgr.setText(globalState.bootModeText, 1, 3);
+    if (pushToScr) scrMgr.updateScreen();
+  }
   updateStatus(bool pushToScr = true) {
     scrMgr.setText(versionText, 0, 2);
-    switch (globalState.currentFiringProfileIndex) {
-      case 0:
-        scrMgr.setText("Profile 0", 1, 3);
-        break;
-      case 1:
-        scrMgr.setText("Profile 1", 1, 3);
-        break;
-      case 2:
-        scrMgr.setText("Profile 2", 1, 3);
-        break;
-    }
+    scrMgr.setText(globalState.bootModeText, 1, 3);
+
     scrMgr.setSprite(102, 3, 5);
     scrMgr.setText(numToCharArray(globalState.targetVelocity), 3, 6);
+
     scrMgr.setSprite(106, 4, 5);
     scrMgr.setText(getModeText(), 4, 6);
+
     scrMgr.setSprite(103, 5, 5);
     scrMgr.setText(getDPSText(), 5, 6);
+
+    uint8_t voltage = getVoltage();
+    Serial.println(voltage);
     scrMgr.setSprite(101, 7, 5);
-    
-    scrMgr.setText(getVoltageText(), 7, 6);
-    scrMgr.setSprite(101, 7, 5);
-    
+    scrMgr.setText(getVoltageText(voltage), 7, 6);
+
     if (pushToScr) scrMgr.updateScreen();
   }
 };
@@ -632,12 +637,20 @@ uint8_t getSelectorIndex() {
   return 0;
 }
 
+char* getBootModeText(uint8_t index) {
+  switch (index) {
+    case 0: return "Profile 0";
+    case 1: return "Profile 1";
+    case 2: return "Profile 2";
+  }
+}
+
 char* getModeText() {
   uint8_t mode = getCurrentFiringProfile().firingMode;
   switch (mode) {
-    case 0: return "Safe";
-    case 1: return "Semi";
-    case 255: return "Auto";
+    case 0: return "Safe  ";
+    case 1: return "Semi  ";
+    case 255: return "Auto  ";
     default: return concat("Burst", numToCharArray(mode));
   }
 }
@@ -647,8 +660,15 @@ char* getDPSText() {
   return concat(numToCharArray(dps), "DPS");
 }
 
-char* getVoltageText() {
+uint16_t getVoltage() {
+  uint16_t rawVal = analogRead(PINVOLTAGE);
+  return rawVal;
+  //return map(rawVal, 0, 1024);
+}
+
+char* getVoltageText(uint16_t voltage) {
   return "00.0v";
+  //return numToCharArray(voltage);
 }
 
 ProfileParams getCurrentFiringProfile() {
@@ -656,7 +676,9 @@ ProfileParams getCurrentFiringProfile() {
 }
 
 void initBootVelocity() {
-  globalState.targetVelocity = bootVelocities[getSelectorIndex()];
+  uint8_t bootSelectorIndex = getSelectorIndex();
+  globalState.targetVelocity = bootVelocities[bootSelectorIndex];
+  globalState.bootModeText = getBootModeText(bootSelectorIndex);
 }
 
 void updateNoidOffTime() {
@@ -696,8 +718,6 @@ UseBootMode getBootMode() {
   if (getDigitalPin(PINSELECT2)) return UseBootMode::BOOTBACK;
   return UseBootMode::BOOTMID;
 }
-
-
 
 void initESC() {
   esc.attach(PINESC, WHEELMINSPEED, WHEELMAXSPEED);
@@ -752,7 +772,7 @@ bool getCyclingLogic() {
   return pusherOn;
 }
 
-unsigned short getRevLogic() {  // Return int with the rev speed.
+uint16_t getRevLogic() {  // Return int with the rev speed.
   if (getDigitalPin(PINREV) || getDigitalPin(PINTRIG)) {
     globalState.currentRevSpeed =
       getDigitalPin(PINMENU) ? (((globalState.targetVelocity - WHEELMINSPEED) * getCurrentFiringProfile().fracVelMultiplier) + WHEELMINSPEED) : globalState.targetVelocity;
@@ -773,7 +793,6 @@ void resetBurstCounter() {
   globalState.burstCounter = getCurrentFiringProfile().firingMode;
 }
 
-
 const char* getBootModeLogString() {
   switch (globalState.useMode) {
     case UseBootMode::BOOTCONFIG:
@@ -789,17 +808,31 @@ void updateFiringProfileIndex() {
   globalState.currentFiringProfileIndex = getSelectorIndex();
 }
 
+void checkScreenUpdate(bool isProfileChanged, uint16_t revLogic) {
+}
+
+bool execInterval(uint32_t interval = 5000) {
+  static unsigned long lastToggle = 0;
+  unsigned long now = millis();
+  if (now - lastToggle >= interval) {
+    lastToggle = now;
+    return true;
+  } else return false;
+}
+
 void bootStandardLoop() {
-  updateFiringProfileIndex(); // update current profile index based on slide switch posiioning.
-  if (globalState.currentFiringProfileIndex != globalState.previousFiringProfileIndex) resetBurstCounter();
-  unsigned short revLogic = getRevLogic();  // updates rev logic, the current motor speed.
+  updateFiringProfileIndex();  // update current profile index based on slide switch posiioning.
+  bool isProfileChanged = globalState.currentFiringProfileIndex != globalState.previousFiringProfileIndex;
+  if (isProfileChanged) resetBurstCounter();
+  uint16_t revLogic = getRevLogic();  // updates rev logic, the current motor speed.
   //Serial.println(digitalRead(PINREV));
   //Serial.println(digitalRead(PINTRIG));
   //Serial.println(analogRead(PINVOLTAGE));
-  Serial.println(revLogic);
+  //Serial.println(revLogic);
   //esc.writeMicroseconds(revLogic);
   //Serial.println(getSelectorIndex());
   setDigitalPin(PINPUSHER, getCyclingLogic());  // updates cycling logic, state of the pusher.
+  checkScreenUpdate(isProfileChanged, revLogic);
   globalState.previousFiringProfileIndex = globalState.currentFiringProfileIndex;
 }
 
@@ -848,5 +881,5 @@ void loop() {
   } else {
     bootConfigLoop();
   }
-  //screenMgr.loopInvertAll();
+  if (execInterval()) UI.updateStatus();
 }
