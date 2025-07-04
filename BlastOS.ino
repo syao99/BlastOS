@@ -11,6 +11,7 @@ Table of Contents (use ctrl-f):
 5. setup() and loop()
 
 */
+#define CTWI_USING_BLOCKING_ACCESS
 
 #include <Servo.h>  // PWM output to ESC's
 #include <nI2C.h>   // Screen
@@ -23,7 +24,6 @@ implement UI layer
 implement controls layer
 */
 
-#define CTWI_USING_BLOCKING_ACCESS
 // 1. Pinout
 // Input
 #define PINREV 11
@@ -323,9 +323,30 @@ struct ScreenMgr {
   CI2C::Handle screen;
 
   uint8_t tileMap[8][16];
+
+  bool setTileMapAt(uint8_t val, uint8_t row, uint8_t col) {
+    if (row > ROW_LAST) return false;
+    if (col > COL_LAST) return false;
+    tileMap[row][col] = val;
+    return true;
+  }
+
+  bool invertTileMapAt(uint8_t row, uint8_t col) {
+    if (row > ROW_LAST) return false;
+    if (col > COL_LAST) return false;
+    tileMap[row][col] ^= 0x80;
+    return true;
+  }
+
+  uint8_t getTileMapAt(uint8_t row, uint8_t col) {
+    if (row > ROW_LAST) row = ROW_LAST;
+    if (col > COL_LAST) col = COL_LAST;
+    return tileMap[row][col];
+  }
   // send one or more control+payload bytes in blocking mode
   bool sendBlock(uint8_t ctrl, const uint8_t* data, uint16_t len) {
     //uint16_t total = len + 1;
+    if (len > (CTWI::SIZE_BUFFER - 2)) return false;
     static uint8_t buf[CTWI::SIZE_BUFFER + 1];
     buf[0] = ctrl;
     memcpy(buf + 1, data, len);
@@ -360,9 +381,9 @@ struct ScreenMgr {
       sendBlock(0x00, &initCmds[i], 1);
   }
 
-  void updateScreenFromTilemap(const uint8_t tileMap[8][16], const uint8_t (*spriteSheet)[8]) {
+  void updateScreenFromTilemap(const uint8_t (*spriteSheet)[8]) {
     // reserve 1 byte for SSD1306 control, 1 for nI2C register address
-    const uint8_t capacity = CTWI::SIZE_BUFFER - 2;
+    //const uint8_t capacity = CTWI::SIZE_BUFFER - 2;
     for (uint8_t page = 0; page < 8; ++page) {
       uint8_t cmd;
 
@@ -378,8 +399,8 @@ struct ScreenMgr {
 
       // stream each tile’s 8 bytes directly
       for (uint8_t block = 0; block < 16; ++block) {
-        //uint8_t entry = tileMap[page][block]; // SWITCH TO THIS TO INVERT ADDRESSES. SPRITES HAVE TO BE INVERTED SEPERATELY.
-        uint8_t entry = tileMap[ROW_LAST - page][COL_LAST - block];
+        //uint8_t entry = getTileMapAt(page,block); // SWITCH TO THIS TO INVERT ADDRESSES. SPRITES HAVE TO BE INVERTED SEPERATELY.
+        uint8_t entry = getTileMapAt(ROW_LAST - page, COL_LAST - block);
         uint8_t id = entry & 0x7F;
         bool invert = entry & 0x80;
         for (uint8_t col = 0; col < 8; ++col) {
@@ -392,7 +413,7 @@ struct ScreenMgr {
   }
 
   void updateScreen() {
-    updateScreenFromTilemap(tileMap, spriteSheet);
+    updateScreenFromTilemap(spriteSheet);
   }
 
   uint8_t charToTileID(char c) {
@@ -453,21 +474,24 @@ struct ScreenMgr {
   // Render a text string at given page, start column:
   void setText(const char* text, uint8_t page, uint8_t startCol) {
     for (uint8_t i = 0; text[i] && startCol + i < COL_COUNT; ++i) {
-      page = constrain(page, 0, ROW_LAST);
-      uint8_t useCol = constrain(startCol + i, 0, COL_LAST);
-      tileMap[page][startCol + i] = charToTileID(text[i]);
+      //page = constrain(page, 0, ROW_LAST);
+      //uint8_t useCol = constrain(startCol + i, 0, COL_LAST);
+      setTileMapAt(charToTileID(text[i]), page, startCol + i);
+      //tileMap[page][useCol] = charToTileID(text[i]);
     }
   }
 
   void setSprite(uint8_t sprite, uint8_t page, uint8_t block) {
-    page = constrain(page, 0, ROW_LAST);
-    block = constrain(block, 0, COL_LAST);
-    tileMap[page][block] = sprite;
+    //page = constrain(page, 0, ROW_LAST);
+    //block = constrain(block, 0, COL_LAST);
+    //tileMap[page][block] = sprite;
+    setTileMapAt(sprite, page, block);
   }
 
   void invertAt(uint8_t page, uint8_t block, uint8_t span) {
     // clamp span so block+span ≤ 16
-    if (block >= COL_COUNT) return;
+    if (block > COL_LAST) return;
+    if (page > ROW_LAST) return;
     uint8_t maxSpan = (block + span > COL_COUNT ? COL_COUNT - block : span);
     for (uint8_t i = 0; i < maxSpan; ++i) {
       tileMap[page][block + i] ^= 0x80;
@@ -479,6 +503,8 @@ struct ScreenMgr {
     for (uint8_t page = 0; page < 8; ++page) {
       for (uint8_t col = 0; col < 16; ++col) {
         //tileMap[ROW_LAST-page][COL_LAST-col] = idx++;
+        if (page > ROW_LAST) break;
+        if (col > COL_LAST) break;
         tileMap[page][col] = idx++;
       }
     }
@@ -537,7 +563,8 @@ struct ScreenMgr {
       lastToggle = now;
       for (uint8_t page = 0; page < 8; ++page) {
         for (uint8_t block = 0; block < COL_COUNT; ++block) {
-          tileMap[page][block] ^= 0x80;
+          //tileMap[page][block] ^= 0x80;
+          invertTileMapAt(page, block);
         }
       }
       if (update) updateScreen();
@@ -811,7 +838,7 @@ void updateFiringProfileIndex() {
 void checkScreenUpdate(bool isProfileChanged, uint16_t revLogic) {
 }
 
-bool execInterval(uint32_t interval = 5000) {
+bool execInterval(unsigned long interval = 500) {
   static unsigned long lastToggle = 0;
   unsigned long now = millis();
   if (now - lastToggle >= interval) {
