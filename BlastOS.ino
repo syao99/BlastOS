@@ -48,6 +48,8 @@ implement controls layer
 #define ROW_COUNT 8
 #define COL_COUNT 16
 
+const char versionText[] = "BlastOS v0.1";
+
 //#define EEPROMOFFSET 24  // max 1000, add 24 if EEPROM issues occur. 24 may actually need to be a different value depending on save config data
 
 // 2. Types
@@ -175,7 +177,7 @@ struct RateLimitedAction {  // rate limited action. use requestExec() to call, t
     }
   }
 };
-struct SingleAction {
+/*struct SingleAction {
   bool isActive = false;
   bool shouldExec = false;
   SingleAction() {}
@@ -190,6 +192,18 @@ struct SingleAction {
       shouldExec = false;
       return true;
     }
+  }
+};*/
+struct SingleAction {
+  bool isLocked = false;
+  SingleAction() {}
+  bool requestExec() {
+    if (isLocked) return false;
+    isLocked = true;
+    return true;
+  }
+  void reset() {
+    isLocked = false;
   }
 };
 
@@ -420,6 +434,18 @@ struct ScreenMgr {
   }
 
 
+  void truncateText(char* text, uint8_t limit) {
+    if (limit == 0) {
+      text[0] = '\0';
+      return;
+    }
+    for (uint8_t i = 0; i < limit; ++i) {
+      if (!text[i]) return;
+    }
+    text[limit] = '\0';
+  }
+
+
   // Render a text string at given page, start column:
   void setText(const char* text, uint8_t page, uint8_t startCol) {
     for (uint8_t i = 0; text[i] && startCol + i < COL_COUNT; ++i) {
@@ -510,21 +536,44 @@ struct ScreenMgr {
     }
   }
 };
+// core implementation always works on uint32_t
+char* displayNum(uint32_t num, uint8_t length) {
+    static char buf[11];          // up to 10 digits + '\0'
+    if (length > 10) length = 10;
+    buf[length] = '\0';
+    for (int8_t i = length - 1;  i >= 0;  --i) {
+        buf[i] = '0' + (num % 10);
+        num /= 10;
+    }
+    return buf;
+}
+// template catches uint8_t, uint16_t, etc.
+template<typename IntType>
+inline char* displayNum(IntType num, uint8_t length) {
+    return displayNum(static_cast<uint32_t>(num), length);
+}
 
-struct StatusUIMgr {
+struct UIMgr {
   ScreenMgr& scrMgr;
-  StatusUIMgr(ScreenMgr& mgr) : scrMgr(mgr) {}
-  update(bool pushToScr) {
-
-    if (pushToScr) scrMgr.updateScreen();
-  }
-};
-
-struct BootUIMgr {
-  ScreenMgr& scrMgr;
-  BootUIMgr(ScreenMgr& mgr) : scrMgr(mgr) {}
-  update(bool pushToScr) {
-    
+  GlobalParams& globalParams;
+  ProfileParams& profileParams;
+  GlobalState& globalState;
+  UIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState)
+    : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) {}
+  update(bool pushToScr = true) {
+    scrMgr.setText(versionText, 0, 2);
+    switch (globalState.currentFiringProfileIndex) {
+      case 0: scrMgr.setText("Profile 0", 1, 3);
+      break;
+      case 1: scrMgr.setText("Profile 1", 1, 3);
+      break;
+      case 2: scrMgr.setText("Profile 2", 1, 3);
+      break;
+    }
+    scrMgr.setSprite(102,3,5);
+    scrMgr.setText(displayNum(globalState.targetVelocity, 4),3,6);
+    scrMgr.setSprite(103,4,5);
+    scrMgr.setText("",3,6);
     if (pushToScr) scrMgr.updateScreen();
   }
 };
@@ -548,8 +597,7 @@ Haptic haptic = Haptic();
 SingleAction btnAction = SingleAction();
 
 ScreenMgr screenMgr;
-StatusUIMgr statusUI { screenMgr };
-BootUIMgr bootUI { screenMgr };
+UIMgr UI{screenMgr, globalParams, firingProfiles, globalState};
 
 uint8_t getSelectorIndex() {
   if (getDigitalPin(PINSELECT1)) return 1;
@@ -722,9 +770,10 @@ void bootConfigLoop() {
 // 5. setup() and loop()
 void setup() {
   screenMgr.initDisplay();
-  screenMgr.cycleSprites();
+  //screenMgr.cycleSprites();
   //setText("Hello World!", 3, 2);
-  screenMgr.updateScreen();
+  UI.update();
+  //screenMgr.updateScreen();
 
   assignPins();
   updateNoidOffTime();
@@ -747,5 +796,5 @@ void loop() {
   } else {
     bootConfigLoop();
   }
-  screenMgr.loopInvertAll();
+  //screenMgr.loopInvertAll();
 }
