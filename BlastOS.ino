@@ -209,7 +209,7 @@ struct SingleAction {
 
 const uint8_t spriteSheet[128][8] PROGMEM = {
   [0] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },    // ' '
-  [1] = { 0x00, 0x78, 0xfc, 0xa4, 0x94, 0xfc, 0x78, 0x00 },    // '0'
+  [1] = { 0x00, 0x7c, 0xfe, 0x92, 0x8a, 0xfe, 0x7c, 0x00 },    // '0'
   [2] = { 0x00, 0x00, 0x02, 0xfe, 0xfe, 0x42, 0x00, 0x00 },    // '1'
   [3] = { 0x00, 0x66, 0xf6, 0x92, 0x9a, 0xce, 0x46, 0x00 },    // '2'
   [4] = { 0x00, 0x6c, 0xfe, 0x92, 0x92, 0xc6, 0x44, 0x00 },    // '3'
@@ -313,6 +313,8 @@ const uint8_t spriteSheet[128][8] PROGMEM = {
   [102] = { 0x0C, 0x10, 0x28, 0x24, 0x20, 0x20, 0x10, 0x0C },  // Speed
   [103] = { 0x00, 0x2A, 0x7F, 0x55, 0x55, 0x55, 0x7F, 0x00 },  // Darts
   [104] = { 0x1C, 0x1C, 0x22, 0x22, 0x22, 0x22, 0x22, 0x3E },  // Dart
+  [105] = { 0x10, 0x28, 0x44, 0x82, 0x82, 0x44, 0x28, 0x10 },  // Diamond
+  [106] = { 0x00, 0x00, 0x54, 0x54, 0x54, 0x54, 0x54, 0x00 },  // Menu Settings
 };
 struct ScreenMgr {
   CI2C* i2c;
@@ -537,20 +539,35 @@ struct ScreenMgr {
   }
 };
 // core implementation always works on uint32_t
-char* displayNum(uint32_t num, uint8_t length) {
-    static char buf[11];          // up to 10 digits + '\0'
-    if (length > 10) length = 10;
-    buf[length] = '\0';
-    for (int8_t i = length - 1;  i >= 0;  --i) {
-        buf[i] = '0' + (num % 10);
-        num /= 10;
-    }
-    return buf;
+char* numToCharArray(uint16_t num) {
+  static char buf[6];  // max "65535"+'\0'
+  uint8_t pos = sizeof(buf) - 1;
+  buf[pos] = '\0';
+  do {
+    buf[--pos] = '0' + (num % 10);
+    num /= 10;
+  } while (num);
+  return &buf[pos];
 }
-// template catches uint8_t, uint16_t, etc.
-template<typename IntType>
-inline char* displayNum(IntType num, uint8_t length) {
-    return displayNum(static_cast<uint32_t>(num), length);
+/*template<typename IntType>
+inline char* numToCharArray(IntType num) {
+    return numToCharArray(static_cast<uint16_t>(num));
+}*/
+
+/*void concat(char *dest, const char *src) {
+    while (*dest) dest++;
+    while (*src) *dest++ = *src++;
+    *dest = '\0';
+}*/
+
+char* concat(const char* a, const char* b) {
+    size_t la = strlen(a);
+    size_t lb = strlen(b);
+    char* result = (char*) malloc(la + lb + 1);
+    if (!result) return nullptr;
+    memcpy(result,       a,  la);
+    memcpy(result + la,  b,  lb + 1);  // copies terminating '\0'
+    return result;
 }
 
 struct UIMgr {
@@ -560,20 +577,30 @@ struct UIMgr {
   GlobalState& globalState;
   UIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState)
     : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) {}
-  update(bool pushToScr = true) {
+  updateStatus(bool pushToScr = true) {
     scrMgr.setText(versionText, 0, 2);
     switch (globalState.currentFiringProfileIndex) {
-      case 0: scrMgr.setText("Profile 0", 1, 3);
-      break;
-      case 1: scrMgr.setText("Profile 1", 1, 3);
-      break;
-      case 2: scrMgr.setText("Profile 2", 1, 3);
-      break;
+      case 0:
+        scrMgr.setText("Profile 0", 1, 3);
+        break;
+      case 1:
+        scrMgr.setText("Profile 1", 1, 3);
+        break;
+      case 2:
+        scrMgr.setText("Profile 2", 1, 3);
+        break;
     }
-    scrMgr.setSprite(102,3,5);
-    scrMgr.setText(displayNum(globalState.targetVelocity, 4),3,6);
-    scrMgr.setSprite(103,4,5);
-    scrMgr.setText("",3,6);
+    scrMgr.setSprite(102, 3, 5);
+    scrMgr.setText(numToCharArray(globalState.targetVelocity), 3, 6);
+    scrMgr.setSprite(106, 4, 5);
+    scrMgr.setText(getModeText(), 4, 6);
+    scrMgr.setSprite(103, 5, 5);
+    scrMgr.setText(getDPSText(), 5, 6);
+    scrMgr.setSprite(101, 7, 5);
+    
+    scrMgr.setText(getVoltageText(), 7, 6);
+    scrMgr.setSprite(101, 7, 5);
+    
     if (pushToScr) scrMgr.updateScreen();
   }
 };
@@ -597,12 +624,31 @@ Haptic haptic = Haptic();
 SingleAction btnAction = SingleAction();
 
 ScreenMgr screenMgr;
-UIMgr UI{screenMgr, globalParams, firingProfiles, globalState};
+UIMgr UI{ screenMgr, globalParams, firingProfiles, globalState };
 
 uint8_t getSelectorIndex() {
   if (getDigitalPin(PINSELECT1)) return 1;
   if (getDigitalPin(PINSELECT2)) return 2;
   return 0;
+}
+
+char* getModeText() {
+  uint8_t mode = getCurrentFiringProfile().firingMode;
+  switch (mode) {
+    case 0: return "Safe";
+    case 1: return "Semi";
+    case 255: return "Auto";
+    default: return concat("Burst", numToCharArray(mode));
+  }
+}
+
+char* getDPSText() {
+  uint8_t dps = getCurrentFiringProfile().noidDPS;
+  return concat(numToCharArray(dps), "DPS");
+}
+
+char* getVoltageText() {
+  return "00.0v";
 }
 
 ProfileParams getCurrentFiringProfile() {
@@ -650,6 +696,8 @@ UseBootMode getBootMode() {
   if (getDigitalPin(PINSELECT2)) return UseBootMode::BOOTBACK;
   return UseBootMode::BOOTMID;
 }
+
+
 
 void initESC() {
   esc.attach(PINESC, WHEELMINSPEED, WHEELMAXSPEED);
@@ -737,8 +785,12 @@ const char* getBootModeLogString() {
   }
 }
 
+void updateFiringProfileIndex() {
+  globalState.currentFiringProfileIndex = getSelectorIndex();
+}
+
 void bootStandardLoop() {
-  globalState.currentFiringProfileIndex = getSelectorIndex();  // update current profile index based on slide switch posiioning.
+  updateFiringProfileIndex(); // update current profile index based on slide switch posiioning.
   if (globalState.currentFiringProfileIndex != globalState.previousFiringProfileIndex) resetBurstCounter();
   unsigned short revLogic = getRevLogic();  // updates rev logic, the current motor speed.
   //Serial.println(digitalRead(PINREV));
@@ -772,7 +824,6 @@ void setup() {
   screenMgr.initDisplay();
   //screenMgr.cycleSprites();
   //setText("Hello World!", 3, 2);
-  UI.update();
   //screenMgr.updateScreen();
 
   assignPins();
@@ -784,7 +835,8 @@ void setup() {
   initESC();  // bind and arm the ESC's for PWM mode
 
   //digitalWrite(LED_BUILTIN, LOW); //disable built-in LED
-
+  updateFiringProfileIndex();
+  UI.updateStatus();
   Serial.begin(9600);
   Serial.println("PM Started");
   Serial.println(getBootModeLogString());
