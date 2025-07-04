@@ -327,6 +327,7 @@ struct ScreenMgr {
   bool setTileMapAt(uint8_t val, uint8_t row, uint8_t col) {
     if (row > ROW_LAST) return false;
     if (col > COL_LAST) return false;
+    if (tileMap[row][col] == val) return true;
     tileMap[row][col] = val;
     return true;
   }
@@ -476,7 +477,7 @@ struct ScreenMgr {
     for (uint8_t i = 0; text[i] && startCol + i < COL_COUNT; ++i) {
       //row = constrain(row, 0, ROW_LAST);
       //uint8_t useCol = constrain(startCol + i, 0, COL_LAST);
-      setTileMapAt(charToTileID(text[i]), row, startCol + i);
+      if (!setTileMapAt(charToTileID(text[i]), row, startCol + i)) return;
       //tileMap[row][useCol] = charToTileID(text[i]);
     }
   }
@@ -571,6 +572,8 @@ struct ScreenMgr {
     }
   }
 };
+
+
 // core implementation always works on uint32_t
 char* numToCharArray(uint16_t num) {
   static char buf[6];  // max "65535"+'\0'
@@ -582,18 +585,36 @@ char* numToCharArray(uint16_t num) {
   } while (num);
   return &buf[pos];
 }
+char* numToCharArray(uint16_t num, uint8_t minWidth) {
+  static char buf[6];  // max "65535"+'\0'
+  const uint8_t MAX_DIGITS = 5;
+  if (minWidth > MAX_DIGITS) minWidth = MAX_DIGITS;
+  buf[MAX_DIGITS] = '\0';
+  uint8_t pos = MAX_DIGITS;
+  uint8_t count = 0;
+  do {
+    buf[--pos] = '0' + (num % 10);
+    num /= 10;
+    count++;
+  } while (num);
+  while (count < minWidth) {
+    buf[--pos] = '0';
+    count++;
+  }
+  return &buf[pos];
+}
 /*template<typename IntType>
 inline char* numToCharArray(IntType num) {
     return numToCharArray(static_cast<uint16_t>(num));
 }*/
 
-/*void concat(char *dest, const char *src) {
-    while (*dest) dest++;
-    while (*src) *dest++ = *src++;
-    *dest = '\0';
-}*/
+void concat(char* dest, const char* src) {
+  while (*dest) dest++;
+  while (*src) *dest++ = *src++;
+  *dest = '\0';
+}
 
-char* concat(const char* a, const char* b) {
+/*char* concat(const char* a, const char* b) {
   size_t la = strlen(a);
   size_t lb = strlen(b);
   char* result = (char*)malloc(la + lb + 1);
@@ -601,7 +622,7 @@ char* concat(const char* a, const char* b) {
   memcpy(result, a, la);
   memcpy(result + la, b, lb + 1);  // copies terminating '\0'
   return result;
-}
+}*/
 
 struct UIMgr {
   ScreenMgr& scrMgr;
@@ -623,7 +644,9 @@ struct UIMgr {
     scrMgr.setText(numToCharArray(globalState.targetVelocity), 3, 6);
 
     scrMgr.setSprite(106, 4, 5);
-    scrMgr.setText(getModeText(), 4, 6);
+    uint8_t mode = getCurrentFiringProfile().firingMode;
+    scrMgr.setText(getModeText(mode), 4, 6);
+    if (mode > 1 && mode < 255) scrMgr.setText(numToCharArray(mode, 1),4, 11);
 
     scrMgr.setSprite(103, 5, 5);
     scrMgr.setText(getDPSText(), 5, 6);
@@ -672,19 +695,43 @@ char* getBootModeText(uint8_t index) {
   }
 }
 
-char* getModeText() {
-  uint8_t mode = getCurrentFiringProfile().firingMode;
+char* getModeText(uint8_t mode) {
+  //uint8_t mode = getCurrentFiringProfile().firingMode;
   switch (mode) {
     case 0: return "Safe  ";
     case 1: return "Semi  ";
     case 255: return "Auto  ";
-    default: return concat("Burst", numToCharArray(mode));
+    default: return "Burst";
   }
 }
 
+/*char* getModeText(char* buf) {
+  uint8_t mode = getCurrentFiringProfile().firingMode;
+  switch (mode) {
+    case 0:
+      strcpy(buf, "Safe  ");
+      break;
+    case 1:
+      strcpy(buf, "Semi  ");
+      break;
+    case 255:
+      strcpy(buf, "Auto  ");
+      break;
+    default:
+      {
+        // numToCharArray returns a pointer to a static "n" string
+        char* num = numToCharArray(mode);
+        concat(buf, "Burst", num);
+        break;
+      }
+  }
+  return buf;
+}*/
+
 char* getDPSText() {
   uint8_t dps = getCurrentFiringProfile().noidDPS;
-  return concat(numToCharArray(dps), "DPS");
+  
+  return numToCharArray(dps,2);//concat(numToCharArray(dps), "DPS");
 }
 
 uint16_t getVoltage() {
@@ -718,6 +765,18 @@ void updateNoidOffTime() {
 
 // 4. Core Methods
 
+void printTileMap() {
+  for (uint8_t page = 0; page < 8; ++page) {
+    for (uint8_t col = 0; col < 16; ++col) {
+      char* showVal = numToCharArray(screenMgr.getTileMapAt(page, col), 3);
+      //Serial.print(tileMap[page][col], DEC);
+      Serial.print(showVal);
+      Serial.print(' ');
+    }
+    Serial.println();
+  }
+  Serial.println();
+}
 
 bool getDigitalPin(uint8_t pin) {
   return digitalRead(pin) == LOW;
@@ -896,9 +955,9 @@ void setup() {
   //digitalWrite(LED_BUILTIN, LOW); //disable built-in LED
   updateFiringProfileIndex();
   UI.updateStatus();
-  //Serial.begin(9600);
-  //Serial.println("PM Started");
-  //Serial.println(getBootModeLogString());
+  Serial.begin(9600);
+  Serial.println("PM Started");
+  Serial.println(getBootModeLogString());
 }
 
 void loop() {
@@ -907,5 +966,13 @@ void loop() {
   } else {
     bootConfigLoop();
   }
-  if (execInterval()) UI.updateStatus();
+  //if (execInterval()) UI.updateStatus();
+  if (execInterval()) {
+    UI.updateStatus();
+    //screenMgr.loopInvertAll(false);
+    printTileMap();
+    //Serial.println(numToCharArray(1,3));
+    //Serial.println(numToCharArray(22,3));
+    //S
+  }
 }
