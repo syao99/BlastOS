@@ -358,7 +358,6 @@ struct ScreenMgr {
     i2c = nI2C;
     i2c->SetTimeoutMS(100);
     screen = i2c->RegisterDevice(SCREEN_ADDR, 1, CI2C::Speed::FAST);
-
     const uint8_t initCmds[] = {
       0xAE,        // display off
       0xD5, 0x80,  // set display clock
@@ -377,17 +376,17 @@ struct ScreenMgr {
       0xA6,        // normal display
       0xAF         // display on
     };
-
-    for (uint8_t i = 0; i < sizeof(initCmds); ++i)
+    for (uint8_t i = 0; i < sizeof(initCmds); ++i) {
       sendcol(0x00, &initCmds[i], 1);
+    }
+    screenClear();
   }
 
-  void updateScreenFromTilemap(const uint8_t (*spriteSheet)[8]) {
+  void screenClear() {
     // reserve 1 byte for SSD1306 control, 1 for nI2C register address
     //const uint8_t capacity = CTWI::SIZE_BUFFER - 2;
     for (uint8_t row = 0; row < 8; ++row) {
       uint8_t cmd;
-
       // set row address
       cmd = 0xB0 | row;
       sendcol(0x00, &cmd, 1);
@@ -397,7 +396,30 @@ struct ScreenMgr {
       // set column high nibble = 0
       cmd = 0x10;
       sendcol(0x00, &cmd, 1);
+      // stream each tile’s 8 bytes directly
+      for (uint8_t col = 0; col < 16; ++col) {
+        for (uint8_t col = 0; col < 8; ++col) {
+          uint8_t b = 0;
+          sendcol(0x40, &b, 1);
+        }
+      }
+    }
+  }
 
+  void updateScreenFromTilemap(const uint8_t (*spriteSheet)[8]) {
+    // reserve 1 byte for SSD1306 control, 1 for nI2C register address
+    //const uint8_t capacity = CTWI::SIZE_BUFFER - 2;
+    for (uint8_t row = 0; row < 8; ++row) {
+      uint8_t cmd;
+      // set row address
+      cmd = 0xB0 | row;
+      sendcol(0x00, &cmd, 1);
+      // set column low nibble = 0
+      cmd = 0x00;
+      sendcol(0x00, &cmd, 1);
+      // set column high nibble = 0
+      cmd = 0x10;
+      sendcol(0x00, &cmd, 1);
       // stream each tile’s 8 bytes directly
       for (uint8_t col = 0; col < 16; ++col) {
         //uint8_t entry = getTileMapAt(row,col); // SWITCH TO THIS TO INVERT ADDRESSES. SPRITES HAVE TO BE INVERTED SEPERATELY.
@@ -603,6 +625,35 @@ char* numToCharArray(uint16_t num, uint8_t minWidth) {
   }
   return &buf[pos];
 }
+char* voltageToCharArray(uint16_t voltage,
+                         uint8_t decimalPlacement = 2,
+                         uint8_t minWidth = 2) {
+  if (voltage > 9999) voltage = 9999;
+  static char buf[8];  // enough for "65535.00\0"
+  const uint8_t MAX_IDX = sizeof(buf) - 1;
+  buf[MAX_IDX] = '\0';
+  uint8_t pos = MAX_IDX;
+  // 1) fractional digits
+  for (uint8_t i = 0; i < decimalPlacement; ++i) {
+    buf[--pos] = '0' + (voltage % 10);
+    voltage /= 10;
+  }
+  // 2) decimal point
+  buf[--pos] = '.';
+  // 3) integer digits
+  uint8_t count = 0;
+  do {
+    buf[--pos] = '0' + (voltage % 10);
+    voltage /= 10;
+    ++count;
+  } while (voltage);
+  // 4) pad with leading spaces up to minWidth
+  while (count < minWidth) {
+    buf[--pos] = ' ';
+    ++count;
+  }
+  return &buf[pos];
+}
 /*template<typename IntType>
 inline char* numToCharArray(IntType num) {
     return numToCharArray(static_cast<uint16_t>(num));
@@ -631,32 +682,39 @@ struct UIMgr {
   GlobalState& globalState;
   UIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState)
     : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) {}
-  initStatus(bool pushToScr = true) {
-    scrMgr.setText(versionText, 0, 2);
-    scrMgr.setText(globalState.bootModeText, 1, 3);
-    if (pushToScr) scrMgr.updateScreen();
-  }
-  updateStatus(bool pushToScr = true) {
-    scrMgr.setText(versionText, 0, 2);
-    scrMgr.setText(globalState.bootModeText, 1, 3);
+  initStatus(bool updateScr = true) {
 
+    scrMgr.setText(versionText, 0, 2);
+    scrMgr.setText(globalState.bootModeText, 1, 3);
     scrMgr.setSprite(102, 3, 5);
     scrMgr.setText(numToCharArray(globalState.targetVelocity), 3, 6);
-
     scrMgr.setSprite(106, 4, 5);
+    scrMgr.setSprite(103, 5, 5);
+    scrMgr.setText("DPS", 5, 8);
+    scrMgr.setText("v", 7, 11);
+    if (updateScr) scrMgr.updateScreen();
+  }
+  updateStatus(bool updateScr = true) {
+    //scrMgr.setText(versionText, 0, 2); // Only need once.
+    //scrMgr.setText(globalState.bootModeText, 1, 3); // Only need once.
+
+    //scrMgr.setSprite(102, 3, 5); // Only need once.
+    scrMgr.setText(numToCharArray(globalState.targetVelocity), 3, 6);  // Only need once.
+
+    //scrMgr.setSprite(106, 4, 5); // Only need once.
     uint8_t mode = getCurrentFiringProfile().firingMode;
     scrMgr.setText(getModeText(mode), 4, 6);
-    if (mode > 1 && mode < 255) scrMgr.setText(numToCharArray(mode, 1),4, 11);
+    if (mode > 1 && mode < 255) scrMgr.setText(numToCharArray(mode, 1), 4, 11);
 
-    scrMgr.setSprite(103, 5, 5);
+    //scrMgr.setSprite(103, 5, 5); // Only need once.
     scrMgr.setText(getDPSText(), 5, 6);
+    //scrMgr.setText("DPS", 5, 8); // Only need once.
 
-    uint8_t voltage = getVoltage();
-    //Serial.println(voltage);
     scrMgr.setSprite(101, 7, 5);
-    scrMgr.setText(getVoltageText(voltage), 7, 6);
+    scrMgr.setText(getVoltageText(analogRead(PINVOLTAGE)), 7, 6);
+    //scrMgr.setText("v", 7, 10); // Only need once.
 
-    if (pushToScr) scrMgr.updateScreen();
+    if (updateScr) scrMgr.updateScreen();
   }
 };
 
@@ -730,19 +788,12 @@ char* getModeText(uint8_t mode) {
 
 char* getDPSText() {
   uint8_t dps = getCurrentFiringProfile().noidDPS;
-  
-  return numToCharArray(dps,2);//concat(numToCharArray(dps), "DPS");
-}
-
-uint16_t getVoltage() {
-  uint16_t rawVal = analogRead(PINVOLTAGE);
-  return rawVal;
-  //return map(rawVal, 0, 1024);
+  return numToCharArray(dps, 2);  //concat(numToCharArray(dps), "DPS");
 }
 
 char* getVoltageText(uint16_t voltage) {
-  return "00.0v";
-  //return numToCharArray(voltage);
+  voltage = map(voltage, 0, 1023, 0, 1680);
+  return voltageToCharArray(voltage);
 }
 
 ProfileParams getCurrentFiringProfile() {
@@ -954,6 +1005,7 @@ void setup() {
 
   //digitalWrite(LED_BUILTIN, LOW); //disable built-in LED
   updateFiringProfileIndex();
+  UI.initStatus();
   UI.updateStatus();
   Serial.begin(9600);
   Serial.println("PM Started");
@@ -966,13 +1018,13 @@ void loop() {
   } else {
     bootConfigLoop();
   }
-  //if (execInterval()) UI.updateStatus();
-  if (execInterval()) {
+  if (execInterval()) UI.updateStatus();
+  /*if (execInterval()) {
     UI.updateStatus();
     //screenMgr.loopInvertAll(false);
-    printTileMap();
+    //printTileMap();
     //Serial.println(numToCharArray(1,3));
     //Serial.println(numToCharArray(22,3));
     //S
-  }
+  }*/
 }
