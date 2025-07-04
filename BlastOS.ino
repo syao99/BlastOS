@@ -11,7 +11,7 @@ Table of Contents (use ctrl-f):
 5. setup() and loop()
 
 */
-#define CTWI_USING_BLOCKING_ACCESS
+#define CTWI_USING_colING_ACCESS
 
 #include <Servo.h>  // PWM output to ESC's
 #include <nI2C.h>   // Screen
@@ -122,7 +122,7 @@ struct Haptic {  // for haptics
   uint16_t cycleTime;
   uint16_t duration;
   unsigned long elapsed;
-  Haptic(uint8_t count = 3, uint16_t on = 30, uint16_t off = 30)
+  Haptic(uint8_t count = 3, uint16_t on = 6, uint16_t off = 6)
     : cycleCount(count),
       onTime(on),
       offTime(off) {}
@@ -343,8 +343,8 @@ struct ScreenMgr {
     if (col > COL_LAST) col = COL_LAST;
     return tileMap[row][col];
   }
-  // send one or more control+payload bytes in blocking mode
-  bool sendBlock(uint8_t ctrl, const uint8_t* data, uint16_t len) {
+  // send one or more control+payload bytes in coling mode
+  bool sendcol(uint8_t ctrl, const uint8_t* data, uint16_t len) {
     //uint16_t total = len + 1;
     if (len > (CTWI::SIZE_BUFFER - 2)) return false;
     static uint8_t buf[CTWI::SIZE_BUFFER + 1];
@@ -378,35 +378,35 @@ struct ScreenMgr {
     };
 
     for (uint8_t i = 0; i < sizeof(initCmds); ++i)
-      sendBlock(0x00, &initCmds[i], 1);
+      sendcol(0x00, &initCmds[i], 1);
   }
 
   void updateScreenFromTilemap(const uint8_t (*spriteSheet)[8]) {
     // reserve 1 byte for SSD1306 control, 1 for nI2C register address
     //const uint8_t capacity = CTWI::SIZE_BUFFER - 2;
-    for (uint8_t page = 0; page < 8; ++page) {
+    for (uint8_t row = 0; row < 8; ++row) {
       uint8_t cmd;
 
-      // set page address
-      cmd = 0xB0 | page;
-      sendBlock(0x00, &cmd, 1);
+      // set row address
+      cmd = 0xB0 | row;
+      sendcol(0x00, &cmd, 1);
       // set column low nibble = 0
       cmd = 0x00;
-      sendBlock(0x00, &cmd, 1);
+      sendcol(0x00, &cmd, 1);
       // set column high nibble = 0
       cmd = 0x10;
-      sendBlock(0x00, &cmd, 1);
+      sendcol(0x00, &cmd, 1);
 
       // stream each tile’s 8 bytes directly
-      for (uint8_t block = 0; block < 16; ++block) {
-        //uint8_t entry = getTileMapAt(page,block); // SWITCH TO THIS TO INVERT ADDRESSES. SPRITES HAVE TO BE INVERTED SEPERATELY.
-        uint8_t entry = getTileMapAt(ROW_LAST - page, COL_LAST - block);
+      for (uint8_t col = 0; col < 16; ++col) {
+        //uint8_t entry = getTileMapAt(row,col); // SWITCH TO THIS TO INVERT ADDRESSES. SPRITES HAVE TO BE INVERTED SEPERATELY.
+        uint8_t entry = getTileMapAt(ROW_LAST - row, COL_LAST - col);
         uint8_t id = entry & 0x7F;
         bool invert = entry & 0x80;
         for (uint8_t col = 0; col < 8; ++col) {
           uint8_t b = pgm_read_byte(&spriteSheet[id][col]);
           if (invert) b = ~b;
-          sendBlock(0x40, &b, 1);
+          sendcol(0x40, &b, 1);
         }
       }
     }
@@ -471,56 +471,56 @@ struct ScreenMgr {
   }
 
 
-  // Render a text string at given page, start column:
-  void setText(const char* text, uint8_t page, uint8_t startCol) {
+  // Render a text string at given row, start column:
+  void setText(const char* text, uint8_t row, uint8_t startCol) {
     for (uint8_t i = 0; text[i] && startCol + i < COL_COUNT; ++i) {
-      //page = constrain(page, 0, ROW_LAST);
+      //row = constrain(row, 0, ROW_LAST);
       //uint8_t useCol = constrain(startCol + i, 0, COL_LAST);
-      setTileMapAt(charToTileID(text[i]), page, startCol + i);
-      //tileMap[page][useCol] = charToTileID(text[i]);
+      setTileMapAt(charToTileID(text[i]), row, startCol + i);
+      //tileMap[row][useCol] = charToTileID(text[i]);
     }
   }
 
-  void setSprite(uint8_t sprite, uint8_t page, uint8_t block) {
-    //page = constrain(page, 0, ROW_LAST);
-    //block = constrain(block, 0, COL_LAST);
-    //tileMap[page][block] = sprite;
-    setTileMapAt(sprite, page, block);
+  void setSprite(uint8_t sprite, uint8_t row, uint8_t col) {
+    //row = constrain(row, 0, ROW_LAST);
+    //col = constrain(col, 0, COL_LAST);
+    //tileMap[row][col] = sprite;
+    setTileMapAt(sprite, row, col);
   }
 
-  void invertAt(uint8_t page, uint8_t block, uint8_t span) {
-    // clamp span so block+span ≤ 16
-    if (block > COL_LAST) return;
-    if (page > ROW_LAST) return;
-    uint8_t maxSpan = (block + span > COL_COUNT ? COL_COUNT - block : span);
+  void invertAt(uint8_t row, uint8_t col, uint8_t span) {
+    // clamp span so col+span ≤ 16
+    if (col > COL_LAST) return;
+    if (row > ROW_LAST) return;
+    uint8_t maxSpan = (col + span > COL_COUNT ? COL_COUNT - col : span);
     for (uint8_t i = 0; i < maxSpan; ++i) {
-      tileMap[page][block + i] ^= 0x80;
+      tileMap[row][col + i] ^= 0x80;
     }
   }
 
   void cycleSprites() {
     uint8_t idx = 0;
-    for (uint8_t page = 0; page < 8; ++page) {
+    for (uint8_t row = 0; row < 8; ++row) {
       for (uint8_t col = 0; col < 16; ++col) {
-        //tileMap[ROW_LAST-page][COL_LAST-col] = idx++;
-        if (page > ROW_LAST) break;
+        //tileMap[ROW_LAST-row][COL_LAST-col] = idx++;
+        if (row > ROW_LAST) break;
         if (col > COL_LAST) break;
-        tileMap[page][col] = idx++;
+        tileMap[row][col] = idx++;
       }
     }
   }
 
   void setupTileMapHelloWorld() {
     // Clear all to blank (0)
-    for (uint8_t page = 0; page < 8; ++page)
+    for (uint8_t row = 0; row < 8; ++row)
       for (uint8_t tx = 0; tx < 16; ++tx)
-        tileMap[page][tx] = 0;
+        tileMap[row][tx] = 0;
 
     // "Hello World" length: 11 chars
-    // Place horizontally centered on page 3 (row 3)
+    // Place horizontally centered on row 3 (row 3)
     // Center horizontally: (16 - 11) / 2 = 2.5 → start at tile 2 or 3
     uint8_t startX = 2;
-    uint8_t page = 3;
+    uint8_t row = 3;
 
     const char* text = "Hello World";
 
@@ -543,14 +543,14 @@ struct ScreenMgr {
       else
         tileId = 0;  // fallback blank
 
-      tileMap[page][startX + i] = tileId;
+      tileMap[row][startX + i] = tileId;
     }
   }
 
   void setCheckers() {
-    for (uint8_t page = 0; page < ROW_COUNT; ++page) {
-      for (uint8_t block = 0; block < COL_COUNT; ++block) {
-        tileMap[page][block] = ((page + block) & 1) ? 0x80 : 0x00;
+    for (uint8_t row = 0; row < ROW_COUNT; ++row) {
+      for (uint8_t col = 0; col < COL_COUNT; ++col) {
+        tileMap[row][col] = ((row + col) & 1) ? 0x80 : 0x00;
       }
     }
   }
@@ -561,10 +561,10 @@ struct ScreenMgr {
     uint32_t now = millis();
     if (now - lastToggle >= interval) {
       lastToggle = now;
-      for (uint8_t page = 0; page < 8; ++page) {
-        for (uint8_t block = 0; block < COL_COUNT; ++block) {
-          //tileMap[page][block] ^= 0x80;
-          invertTileMapAt(page, block);
+      for (uint8_t row = 0; row < 8; ++row) {
+        for (uint8_t col = 0; col < COL_COUNT; ++col) {
+          //tileMap[row][col] ^= 0x80;
+          invertTileMapAt(row, col);
         }
       }
       if (update) updateScreen();
@@ -629,7 +629,7 @@ struct UIMgr {
     scrMgr.setText(getDPSText(), 5, 6);
 
     uint8_t voltage = getVoltage();
-    Serial.println(voltage);
+    //Serial.println(voltage);
     scrMgr.setSprite(101, 7, 5);
     scrMgr.setText(getVoltageText(voltage), 7, 6);
 
@@ -790,7 +790,6 @@ bool getCyclingLogic() {
       globalState.burstCounter--;  // not practical to try to gate this from loop() execution, so we accept the off by one issue and check again
       if (hasRemainingBursts()) {
         pusherOn = true;  // reset the firing cycle
-        Serial.println(globalState.burstCounter);
         resetCycle();
       }
     }
@@ -897,9 +896,9 @@ void setup() {
   //digitalWrite(LED_BUILTIN, LOW); //disable built-in LED
   updateFiringProfileIndex();
   UI.updateStatus();
-  Serial.begin(9600);
-  Serial.println("PM Started");
-  Serial.println(getBootModeLogString());
+  //Serial.begin(9600);
+  //Serial.println("PM Started");
+  //Serial.println(getBootModeLogString());
 }
 
 void loop() {
