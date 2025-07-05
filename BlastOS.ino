@@ -34,13 +34,12 @@ implement controls layer
 #define PINVOLTAGE A3
 // Output
 #define PINESC 8
-#define PINPUSHER 13  //10 USE PIN 10 FOR IMPLEMENTATION, 13 IS FOR LED DEBUGGING. PIN 13 WILL ACTUATE THE NOID ON POWERUP, POSSIBLY CAUSING JAMS.
+#define PINPUSHER 10  //10 USE PIN 10 FOR IMPLEMENTATION, 13 IS FOR LED DEBUGGING. PIN 13 WILL ACTUATE THE NOID ON POWERUP, POSSIBLY CAUSING JAMS.
 //#define PINPUSHER 10
 // Other Params
 #define WHEELMINSPEED 1000
 #define WHEELMAXSPEED 2000
-#define MAXVOLTAGE 16.8
-#define DIVIDEDVOLTAGE 5
+#define HWMAXVOLTAGE 1680
 #define ENABLEDECAY true
 
 #define SCREEN_ADDR 0x3C
@@ -76,7 +75,11 @@ struct GlobalParams {
   uint8_t maxDPS = 20;
   uint8_t noidOnTime = 25;
   uint8_t compLockProfile = 0;  // 0 disabled, 1/2/3 for corresponding profiles
-  uint16_t voltageThreshold = 144;
+  uint8_t perCellMin = 36; // do not expose to config yet
+  uint8_t perCellMax = 42; // do not expose to config yet
+  uint8_t cellCount = 4;
+  uint16_t maxVoltage = 169; //or 126
+  uint16_t minVoltage = 144; //or 
   float decayMultiplier = 0.99f;
   GlobalParams() {}
 };
@@ -112,6 +115,8 @@ struct GlobalState {
   char* bootModeText;
   GlobalState() {}
   bool isStealthModeEnabled = false;
+  uint16_t minVoltage;
+  uint16_t maxVoltage;
 };
 struct Haptic {  // for haptics
   unsigned long startTime = 0;
@@ -733,7 +738,7 @@ ProfileParams firingProfiles[] = {  // dps, fvMulti, mode i.e. 0: safe, 1: semi,
   { ProfileParams(globalParams.maxDPS, 0.5f, 1) },
   { ProfileParams(globalParams.maxDPS, 0.5f, 255) }
 };
-uint16_t bootVelocities[] = { 1400, 1200, 1600 };
+uint16_t bootVelocities[] = { 1600, 1450, 2000 };
 GlobalState globalState;
 Debounceable debounceableTrigger;
 Debounceable debounceableMenu;
@@ -772,7 +777,7 @@ char* getDPSText() {
 }
 
 char* getVoltageText(uint16_t voltage) {
-  voltage = map(voltage, 0, 1023, 0, 1680);
+  voltage = map(voltage, 0, 1023, 0, HWMAXVOLTAGE);
   return voltageToCharArray(voltage);
 }
 
@@ -948,12 +953,14 @@ void bootStandardLoop() {
   bool isMenuPressed = getDigitalPin(PINMENU);
   bool revOrTrigIsActive = isRevOrTrigActive();
   bool isProfileChanged = globalState.currentFiringProfileIndex != globalState.previousFiringProfileIndex;
+  bool cyclingLogic = getCyclingLogic();
   globalState.isStealthModeEnabled = !revOrTrigIsActive && isMenuPressed;
   if (isProfileChanged) resetBurstCounter();
   uint16_t revLogic = getRevLogic(isMenuPressed, revOrTrigIsActive);  // updates rev logic, the current motor speed.
   Serial.println(revLogic);
-  //esc.writeMicroseconds(revLogic);
-  setDigitalPin(PINPUSHER, getCyclingLogic());  // updates cycling logic, state of the pusher.
+  esc.writeMicroseconds(revLogic);
+  setDigitalPin(PINPUSHER, cyclingLogic);  // updates cycling logic, state of the pusher.
+  if (!globalState.isStealthModeEnabled) setDigitalPin(LED_BUILTIN, cyclingLogic);
   if (globalState.isStealthModeEnabled != previousIsStealthModeEnabled && globalState.isStealthModeEnabled) screenMgr.screenClear();
   if (!globalState.isStealthModeEnabled && shouldScreenUpdate(isProfileChanged, revOrTrigIsActive, isMenuPressed)) UI.updateStatus();
   globalState.previousFiringProfileIndex = globalState.currentFiringProfileIndex;
