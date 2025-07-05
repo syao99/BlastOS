@@ -111,6 +111,7 @@ struct GlobalState {
   UseBootMode useMode;
   char* bootModeText;
   GlobalState() {}
+  bool isStealthModeEnabled = false;
 };
 struct Haptic {  // for haptics
   unsigned long startTime = 0;
@@ -324,6 +325,8 @@ struct ScreenMgr {
 
   uint8_t tileMap[8][16];
 
+  bool isScreenCleared;
+
   bool setTileMapAt(uint8_t val, uint8_t row, uint8_t col) {
     if (row > ROW_LAST) return false;
     if (col > COL_LAST) return false;
@@ -404,6 +407,7 @@ struct ScreenMgr {
         }
       }
     }
+    isScreenCleared = true;
   }
 
   void updateScreenFromTilemap(const uint8_t (*spriteSheet)[8]) {
@@ -433,6 +437,7 @@ struct ScreenMgr {
         }
       }
     }
+    isScreenCleared = false;
   }
 
   void updateScreen() {
@@ -683,7 +688,6 @@ struct UIMgr {
   UIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState)
     : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) {}
   initStatus(bool updateScr = true) {
-
     scrMgr.setText(versionText, 0, 2);
     scrMgr.setText(globalState.bootModeText, 1, 3);
     scrMgr.setSprite(102, 3, 5);
@@ -699,7 +703,7 @@ struct UIMgr {
     //scrMgr.setText(globalState.bootModeText, 1, 3); // Only need once.
 
     //scrMgr.setSprite(102, 3, 5); // Only need once.
-    scrMgr.setText(numToCharArray(globalState.targetVelocity), 3, 6);  // Only need once.
+    //scrMgr.setText(numToCharArray(globalState.targetVelocity), 3, 6);  // Only need once.
 
     //scrMgr.setSprite(106, 4, 5); // Only need once.
     uint8_t mode = getCurrentFiringProfile().firingMode;
@@ -729,7 +733,7 @@ ProfileParams firingProfiles[] = {  // dps, fvMulti, mode i.e. 0: safe, 1: semi,
   { ProfileParams(globalParams.maxDPS, 0.5f, 1) },
   { ProfileParams(globalParams.maxDPS, 0.5f, 255) }
 };
-uint16_t bootVelocities[] = { 1200, 1400, 1600 };
+uint16_t bootVelocities[] = { 1400, 1200, 1600 };
 GlobalState globalState;
 Debounceable debounceableTrigger;
 Debounceable debounceableMenu;
@@ -747,14 +751,13 @@ uint8_t getSelectorIndex() {
 
 char* getBootModeText(uint8_t index) {
   switch (index) {
-    case 0: return "Profile 0";
-    case 1: return "Profile 1";
-    case 2: return "Profile 2";
+    case 0: return "Power: Mid";
+    case 1: return "Power: Low";
+    case 2: return "Power: High";
   }
 }
 
 char* getModeText(uint8_t mode) {
-  //uint8_t mode = getCurrentFiringProfile().firingMode;
   switch (mode) {
     case 0: return "Safe  ";
     case 1: return "Semi  ";
@@ -762,29 +765,6 @@ char* getModeText(uint8_t mode) {
     default: return "Burst";
   }
 }
-
-/*char* getModeText(char* buf) {
-  uint8_t mode = getCurrentFiringProfile().firingMode;
-  switch (mode) {
-    case 0:
-      strcpy(buf, "Safe  ");
-      break;
-    case 1:
-      strcpy(buf, "Semi  ");
-      break;
-    case 255:
-      strcpy(buf, "Auto  ");
-      break;
-    default:
-      {
-        // numToCharArray returns a pointer to a static "n" string
-        char* num = numToCharArray(mode);
-        concat(buf, "Burst", num);
-        break;
-      }
-  }
-  return buf;
-}*/
 
 char* getDPSText() {
   uint8_t dps = getCurrentFiringProfile().noidDPS;
@@ -809,10 +789,6 @@ void initBootVelocity() {
 void updateNoidOffTime() {
   globalState.noidOffTime = (1000.f / getCurrentFiringProfile().noidDPS) - globalParams.noidOnTime;
 }
-
-//uint16_t deprecated_noidOffTime = findNoidOffTime(deprecated_MAINDPS);
-
-
 
 // 4. Core Methods
 
@@ -908,15 +884,19 @@ bool getCyclingLogic() {
   return pusherOn;
 }
 
-uint16_t getRevLogic() {  // Return int with the rev speed.
-  if (getDigitalPin(PINREV) || getDigitalPin(PINTRIG)) {
+uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return int with the rev speed.
+  if (revOrTrigIsActive) {
     globalState.currentRevSpeed =
-      getDigitalPin(PINMENU) ? (((globalState.targetVelocity - WHEELMINSPEED) * getCurrentFiringProfile().fracVelMultiplier) + WHEELMINSPEED) : globalState.targetVelocity;
+      isMenuPressed ? (((globalState.targetVelocity - WHEELMINSPEED) * getCurrentFiringProfile().fracVelMultiplier) + WHEELMINSPEED) : globalState.targetVelocity;
   } else {
-    if (getDigitalPin(PINMENU) || !ENABLEDECAY) globalState.currentRevSpeed = WHEELMINSPEED;
+    if (globalState.isStealthModeEnabled || !ENABLEDECAY) globalState.currentRevSpeed = WHEELMINSPEED;
     else globalState.currentRevSpeed = ((globalState.currentRevSpeed - WHEELMINSPEED) * globalParams.decayMultiplier) + WHEELMINSPEED;
   }
   return globalState.currentRevSpeed;
+}
+
+bool isRevOrTrigActive() {
+  return getDigitalPin(PINREV) || getDigitalPin(PINTRIG);
 }
 
 bool isFullAuto() {
@@ -944,10 +924,7 @@ void updateFiringProfileIndex() {
   globalState.currentFiringProfileIndex = getSelectorIndex();
 }
 
-void checkScreenUpdate(bool isProfileChanged, uint16_t revLogic) {
-}
-
-bool execInterval(unsigned long interval = 500) {
+bool execInterval(unsigned long interval = 5000) {
   static unsigned long lastToggle = 0;
   unsigned long now = millis();
   if (now - lastToggle >= interval) {
@@ -956,25 +933,37 @@ bool execInterval(unsigned long interval = 500) {
   } else return false;
 }
 
+bool shouldScreenUpdate(bool isProfileChanged, bool revOrTrigIsActive, bool isMenuPressed) {
+  if (isMenuPressed && !revOrTrigIsActive) return false;
+  if (isProfileChanged) return true;
+  if (revOrTrigIsActive) return false;
+  if (isMenuPressed) return false;
+  return execInterval();
+}
+
 void bootStandardLoop() {
   updateFiringProfileIndex();  // update current profile index based on slide switch posiioning.
+  static bool previousIsMenuPressed;
+  static bool previousIsStealthModeEnabled;
+  bool isMenuPressed = getDigitalPin(PINMENU);
+  bool revOrTrigIsActive = isRevOrTrigActive();
   bool isProfileChanged = globalState.currentFiringProfileIndex != globalState.previousFiringProfileIndex;
+  globalState.isStealthModeEnabled = !revOrTrigIsActive && isMenuPressed;
   if (isProfileChanged) resetBurstCounter();
-  uint16_t revLogic = getRevLogic();  // updates rev logic, the current motor speed.
-  //Serial.println(digitalRead(PINREV));
-  //Serial.println(digitalRead(PINTRIG));
-  //Serial.println(analogRead(PINVOLTAGE));
-  //Serial.println(revLogic);
+  uint16_t revLogic = getRevLogic(isMenuPressed, revOrTrigIsActive);  // updates rev logic, the current motor speed.
+  Serial.println(revLogic);
   //esc.writeMicroseconds(revLogic);
-  //Serial.println(getSelectorIndex());
   setDigitalPin(PINPUSHER, getCyclingLogic());  // updates cycling logic, state of the pusher.
-  checkScreenUpdate(isProfileChanged, revLogic);
+  if (globalState.isStealthModeEnabled != previousIsStealthModeEnabled && globalState.isStealthModeEnabled) screenMgr.screenClear();
+  if (!globalState.isStealthModeEnabled && shouldScreenUpdate(isProfileChanged, revOrTrigIsActive, isMenuPressed)) UI.updateStatus();
   globalState.previousFiringProfileIndex = globalState.currentFiringProfileIndex;
+  previousIsMenuPressed = isMenuPressed;
+  previousIsStealthModeEnabled = globalState.isStealthModeEnabled;
 }
 
 void bootConfigLoop() {
   bool isMenuPressed = getDigitalPin(PINMENU);
-  if (getDigitalPin(PINMENU)) {
+  if (isMenuPressed) {
     if (debounceableMenu.isDebounced()) {
       haptic.start();
     }
@@ -1008,7 +997,7 @@ void setup() {
   UI.initStatus();
   UI.updateStatus();
   Serial.begin(9600);
-  Serial.println("PM Started");
+  Serial.println("Welcome to BlastOS");
   Serial.println(getBootModeLogString());
 }
 
@@ -1018,13 +1007,4 @@ void loop() {
   } else {
     bootConfigLoop();
   }
-  if (execInterval()) UI.updateStatus();
-  /*if (execInterval()) {
-    UI.updateStatus();
-    //screenMgr.loopInvertAll(false);
-    //printTileMap();
-    //Serial.println(numToCharArray(1,3));
-    //Serial.println(numToCharArray(22,3));
-    //S
-  }*/
 }
