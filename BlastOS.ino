@@ -11,7 +11,7 @@ Table of Contents (use ctrl-f):
 5. setup() and loop()
 
 */
-#define CTWI_USING_colING_ACCESS
+//#define CTWI_USING_BLOCKING_ACCESS
 
 #include <Servo.h>  // PWM output to ESC's
 #include <nI2C.h>   // Screen
@@ -19,11 +19,9 @@ Table of Contents (use ctrl-f):
 
 /*
 todo:
-switch pusher to pin 10 after debugging.
-implement UI layer
-implement controls layer
+implement config UI
 */
-
+#define DEBUGMODE true
 // 1. Pinout
 // Input
 #define PINREV 11
@@ -143,63 +141,16 @@ struct Haptic {
   bool getUpdatedStatus() {
     if (!isActive) return false;
     elapsed = millis() - startTime;
-    if (isDone()) {
-      //stop();
-      return false;
-    }
+    if (isDone()) return false;
     state = (elapsed % cycleTime) < onTime;
     return state;
     // verify logical premise in js browser console:
-    //for (i = 0; i<100; i++) {
-    //  console.log((i % 10)<4);
-    //}
+    //for (i = 0; i < 100; i++) console.log((i % 10) < 4);
   }
   void reset() {
     isActive = false;
   }
 };
-/*struct RateLimitedAction {  // rate limited action. use requestExec() to call, then if (shouldExec()) function() to call.
-  const uint8_t delay;
-  unsigned long startTime;
-  bool isActive = false;
-  bool shouldExec = false;
-  RateLimitedAction(uint8_t timing = 100)
-    : delay(timing) {}
-  void requestExec() {
-    if (isActive) return;
-    startTime = millis();
-    isActive = true;
-    shouldExec = true;
-  }
-  bool findShouldExec() {
-    if (!isActive) return false;
-    if (shouldExec) {
-      shouldExec = false;
-      return true;
-    }
-    if ((millis() - startTime) > delay) {
-      isActive = false;
-      return false;
-    }
-  }
-};*/
-/*struct SingleAction {
-  bool isActive = false;
-  bool shouldExec = false;
-  SingleAction() {}
-  void requestExec() {
-    if (isActive) return;
-    isActive = true;
-    shouldExec = true;
-  }
-  bool findShouldExec() {
-    if (!isActive) return false;
-    if (shouldExec) {
-      shouldExec = false;
-      return true;
-    }
-  }
-};*/
 struct SingleAction {
   bool isLocked = false;
   SingleAction() {}
@@ -393,14 +344,11 @@ struct ScreenMgr {
     //const uint8_t capacity = CTWI::SIZE_BUFFER - 2;
     for (uint8_t row = 0; row < 8; ++row) {
       uint8_t cmd;
-      // set row address
-      cmd = 0xB0 | row;
+      cmd = 0xB0 | row;  // set row address
       sendcol(0x00, &cmd, 1);
-      // set column low nibble = 0
-      cmd = 0x00;
+      cmd = 0x00;  // set column low nibble = 0
       sendcol(0x00, &cmd, 1);
-      // set column high nibble = 0
-      cmd = 0x10;
+      cmd = 0x10;  // set column high nibble = 0
       sendcol(0x00, &cmd, 1);
       // stream each tile’s 8 bytes directly
       for (uint8_t col = 0; col < 16; ++col) {
@@ -602,8 +550,23 @@ struct ScreenMgr {
     }
   }
 };
+char* numToTextPrepend(uint16_t num, char prepend = '_') {
+    // Allow space for up to 5 digits + 1 prepend char + null terminator
+    static char buf[7];
+    uint8_t pos = sizeof(buf) - 1;
+    buf[pos] = '\0';
+    // Fill in digits from the end
+    do {
+        buf[--pos] = '0' + (num % 10);
+        num /= 10;
+    } while (num);
+    // Prepend the specified character
+    buf[--pos] = prepend;
+    // Return pointer to the start of the result
+    return &buf[pos];
+}
 
-char* numToCharArray(uint16_t num) {
+char* numToText(uint16_t num) {
   static char buf[6];  // max "65535"+'\0'
   uint8_t pos = sizeof(buf) - 1;
   buf[pos] = '\0';
@@ -613,7 +576,7 @@ char* numToCharArray(uint16_t num) {
   } while (num);
   return &buf[pos];
 }
-char* numToCharArray(uint16_t num, uint8_t minWidth) {
+char* numToText(uint16_t num, uint8_t minWidth) {
   static char buf[6];  // max "65535"+'\0'
   const uint8_t MAX_DIGITS = 5;
   if (minWidth > MAX_DIGITS) minWidth = MAX_DIGITS;
@@ -631,7 +594,7 @@ char* numToCharArray(uint16_t num, uint8_t minWidth) {
   }
   return &buf[pos];
 }
-char* voltageToCharArray(uint16_t voltage,
+char* voltageToText(uint16_t voltage,
                          uint8_t decimalPlacement = 2,
                          uint8_t minWidth = 2) {
   if (voltage > 9999) voltage = 9999;
@@ -681,14 +644,13 @@ const char* const configMenuTexts[CONFIGPAGECOUNT][ROW_COUNT] PROGMEM = {
   },
   {
     "Global Settings ",
-    "< Back           ",
+    "< Back          ",
     "Max DPS: ??     ",
     "PusherTime: ??ms",
     "BattCellCount: ?",
     "Coasting: 99.0% ",  //  < 0%, 80-99.5%
     "Comp Lock: ???  ",  // < Off, P1, P2, P3
-    "P?: ????        ",
-    //"RevOffTimeS: ???", // < max 1s",
+    "P?: ????        ",  //"RevOffTimeS: ???", // < max 1s",
   },
   {
     "   Velocities   ",
@@ -747,7 +709,7 @@ struct UIMgr {
     scrMgr.setText(versionText, 0, 2);
     scrMgr.setText(globalState.bootModeText, 1, 3);
     scrMgr.setSprite(102, 3, 5);
-    scrMgr.setText(numToCharArray(globalState.targetVelocity), 3, 6);
+    scrMgr.setText(numToText(globalState.targetVelocity), 3, 6);
     scrMgr.setSprite(106, 4, 5);
     scrMgr.setSprite(103, 5, 5);
     scrMgr.setText("DPS", 5, 8);
@@ -755,25 +717,15 @@ struct UIMgr {
     if (updateScr) scrMgr.updateScreen();
   }
   updateStatus(bool updateScr = true) {
-    //scrMgr.setText(versionText, 0, 2); // Only need once.
-    //scrMgr.setText(globalState.bootModeText, 1, 3); // Only need once.
-
-    //scrMgr.setSprite(102, 3, 5); // Only need once.
-    //scrMgr.setText(numToCharArray(globalState.targetVelocity), 3, 6);  // Only need once.
-
-    //scrMgr.setSprite(106, 4, 5); // Only need once.
     uint8_t mode = getCurrentFiringProfile().firingMode;
     scrMgr.setText(getModeText(mode), 4, 6);
-    if (mode > 1 && mode < 255) scrMgr.setText(numToCharArray(mode, 1), 4, 11);
+    if (mode > 1 && mode < 255) scrMgr.setText(numToText(mode, 1), 4, 11);
 
-    //scrMgr.setSprite(103, 5, 5); // Only need once.
     scrMgr.setText(getDPSText(), 5, 6);
-    //scrMgr.setText("DPS", 5, 8); // Only need once.
 
     scrMgr.setSprite(101, 7, 5);
     uint16_t voltage = map(analogRead(PINVOLTAGE), 0, 1023, 0, HWMAXVOLTAGE);
-    scrMgr.setText(voltageToCharArray(voltage), 7, 6);
-    //scrMgr.setText("v", 7, 10); // Only need once.
+    scrMgr.setText(voltageToText(voltage), 7, 6);
 
     if (voltage < globalState.minVoltage) {
       globalState.isUnsafeVoltage = true;
@@ -796,13 +748,13 @@ struct UIMgr {
   drawConfigPageDetails(uint8_t page) {
     switch (page) {
       case 0:
-        //scrMgr.setText();
         break;
       case 1:
         scrMgr.setText(globalParams.maxDPS, 2, 9);
         scrMgr.setText(globalParams.noidOnTime, 3, 12);
         scrMgr.setText(globalParams.cellCount, 4, 15);
-        //scrMgr.setText(globalParams.decayMultiplier, 5, 10);
+        scrMgr.setText(globalParams.decayMultiplier, 5, 10);
+        scrMgr.setText(globalParams.compLockProfile, 6, 11);
         break;
       case 2:
         //scrMgr.setText();
@@ -881,7 +833,17 @@ char* getModeText(uint8_t mode) {
 
 char* getDPSText() {
   uint8_t dps = getCurrentFiringProfile().noidDPS;
-  return numToCharArray(dps, 2);  //concat(numToCharArray(dps), "DPS");
+  return numToText(dps, 2);
+}
+
+char* getCompLockProfileText() {
+  uint8_t profile = globalParams.compLockProfile;
+  switch (profile) {
+    case 0: return "Off";
+    default: {
+      return numToTextPrepend(profile, 'P');
+    }
+  }
 }
 
 ProfileParams getCurrentFiringProfile() {
@@ -916,7 +878,7 @@ bool isSafetyLockout() {
 void printTileMap() {
   for (uint8_t page = 0; page < 8; ++page) {
     for (uint8_t col = 0; col < 16; ++col) {
-      char* showVal = numToCharArray(screenMgr.getTileMapAt(page, col), 3);
+      char* showVal = numToText(screenMgr.getTileMapAt(page, col), 3);
       Serial.print(showVal);
       Serial.print(' ');
     }
@@ -1076,10 +1038,14 @@ void bootStandardLoop() {
   globalState.isStealthModeEnabled = !revOrTrigIsActive && isMenuPressed;
   if (isProfileChanged) resetBurstCounter();
   uint16_t revLogic = getRevLogic(isMenuPressed, revOrTrigIsActive);  // updates rev logic, the current motor speed.
+#if DEBUGMODE
   Serial.println(revLogic);
+#endif
   esc.writeMicroseconds(revLogic);
   setDigitalPin(PINPUSHER, cyclingLogic);  // updates cycling logic, state of the pusher.
-  if (!globalState.isStealthModeEnabled) setDigitalPin(LED_BUILTIN, cyclingLogic);
+#if DEBUGMODE
+  setDigitalPin(LED_BUILTIN, cyclingLogic);
+#endif
   if (globalState.isStealthModeEnabled != previousIsStealthModeEnabled && globalState.isStealthModeEnabled) screenMgr.screenClear();
   if (!globalState.isStealthModeEnabled && shouldScreenUpdate(isProfileChanged, revOrTrigIsActive, isMenuPressed)) UI.updateStatus();
   globalState.previousFiringProfileIndex = globalState.currentFiringProfileIndex;
@@ -1103,7 +1069,9 @@ void bootConfigLoop() {
   }*/
   previousIsMenuPressed = isMenuPressed;
   setDigitalPin(PINPUSHER, haptic.getUpdatedStatus());
+#if DEBUGMODE
   setDigitalPin(LED_BUILTIN, haptic.getUpdatedStatus());
+#endif
 }
 
 // 5. setup() and loop()
@@ -1112,7 +1080,7 @@ void setup() {
   screenMgr.initDisplay();
   assignPins();
   globalState.useMode = getBootMode();  // WIP boot mode implementation
-  initESC();  // bind and arm the ESC's for PWM mode
+  initESC();                            // bind and arm the ESC's for PWM mode
 
   updateFiringProfileIndex();
   if (globalState.useMode != UseBootMode::BOOTCONFIG) {
@@ -1121,11 +1089,12 @@ void setup() {
     UI.initStatus();
     UI.updateStatus();
   } else {
-    
   }
+#if DEBUGMODE
   Serial.begin(9600);
   Serial.println("Welcome to BlastOS");
   Serial.println(getBootModeLogString());
+#endif
 }
 
 void loop() {
