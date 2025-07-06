@@ -48,16 +48,15 @@ implement controls layer
 #define ROW_COUNT 8
 #define COL_COUNT 16
 
-const char versionText[] = "BlastOS v0.1";
-
 //#define EEPROMOFFSET 24  // max 1000, add 24 if EEPROM issues occur. 24 may actually need to be a different value depending on save config data
+const char* versionText = "BlastOS v0.1";
 
 // 2. Types
 enum class UseBootMode : uint8_t { BOOTMID,
                                    BOOTFRONT,
                                    BOOTBACK,
-                                   BOOTCONFIG };  // zero: default on tb2, middle position phanta.
-//maybe refactor this to just uint8_t, zero for config. idk yet.
+                                   BOOTCONFIG,
+};
 
 struct Debounceable {
   const uint8_t debounceTime;
@@ -75,12 +74,11 @@ struct GlobalParams {
   uint8_t maxDPS = 20;
   uint8_t noidOnTime = 25;
   uint8_t compLockProfile = 0;  // 0 disabled, 1/2/3 for corresponding profiles
-  uint8_t perCellMin = 36; // do not expose to config yet
-  uint8_t perCellMax = 42; // do not expose to config yet
+  uint16_t minPerCell = 360;    // do not expose to config yet
+  uint16_t maxPerCell = 420;    // do not expose to config yet
   uint8_t cellCount = 4;
-  uint16_t maxVoltage = 169; //or 126
-  uint16_t minVoltage = 144; //or 
-  float decayMultiplier = 0.99f;
+  bool enableVoltageSafetyLockout = false;
+  uint8_t decayMultiplier = 99;
   GlobalParams() {}
 };
 struct ProfileParams {
@@ -103,8 +101,6 @@ struct GlobalState {
   unsigned long cycleStartTime = 0;
   bool isCycleActive = false;
   bool previousIsFiring = false;
-  //bool previousIsTriggerPulled = false;
-  bool previousIsMenuPressed = false;
   uint8_t burstCounter = 0;
   bool noidState = false;
   uint16_t currentRevSpeed = WHEELMINSPEED;
@@ -117,8 +113,10 @@ struct GlobalState {
   bool isStealthModeEnabled = false;
   uint16_t minVoltage;
   uint16_t maxVoltage;
+  bool isUnsafeVoltage = true;
+  float calcdDecayMultiplier;
 };
-struct Haptic {  // for haptics
+struct Haptic {
   unsigned long startTime = 0;
   bool isActive = false;  // external control to enable or shut off the cycle. takes effect immediately but can fix that later.
   bool state = false;
@@ -160,7 +158,7 @@ struct Haptic {  // for haptics
     isActive = false;
   }
 };
-struct RateLimitedAction {  // rate limited action. use requestExec() to call, then if (shouldExec()) function() to call.
+/*struct RateLimitedAction {  // rate limited action. use requestExec() to call, then if (shouldExec()) function() to call.
   const uint8_t delay;
   unsigned long startTime;
   bool isActive = false;
@@ -184,7 +182,7 @@ struct RateLimitedAction {  // rate limited action. use requestExec() to call, t
       return false;
     }
   }
-};
+};*/
 /*struct SingleAction {
   bool isActive = false;
   bool shouldExec = false;
@@ -505,7 +503,7 @@ struct ScreenMgr {
 
 
   // Render a text string at given row, start column:
-  void setText(const char* text, uint8_t row, uint8_t startCol) {
+  void setText(const char* text, uint8_t row, uint8_t startCol = 0) {
     for (uint8_t i = 0; text[i] && startCol + i < COL_COUNT; ++i) {
       //row = constrain(row, 0, ROW_LAST);
       //uint8_t useCol = constrain(startCol + i, 0, COL_LAST);
@@ -605,8 +603,6 @@ struct ScreenMgr {
   }
 };
 
-
-// core implementation always works on uint32_t
 char* numToCharArray(uint16_t num) {
   static char buf[6];  // max "65535"+'\0'
   uint8_t pos = sizeof(buf) - 1;
@@ -664,26 +660,81 @@ char* voltageToCharArray(uint16_t voltage,
   }
   return &buf[pos];
 }
-/*template<typename IntType>
-inline char* numToCharArray(IntType num) {
-    return numToCharArray(static_cast<uint16_t>(num));
-}*/
-
 void concat(char* dest, const char* src) {
   while (*dest) dest++;
   while (*src) *dest++ = *src++;
   *dest = '\0';
 }
 
-/*char* concat(const char* a, const char* b) {
-  size_t la = strlen(a);
-  size_t lb = strlen(b);
-  char* result = (char*)malloc(la + lb + 1);
-  if (!result) return nullptr;
-  memcpy(result, a, la);
-  memcpy(result + la, b, lb + 1);  // copies terminating '\0'
-  return result;
-}*/
+uint8_t globalSettingsData[] = { 2 };
+#define CONFIGPAGECOUNT 6
+const char* const configMenuTexts[CONFIGPAGECOUNT][ROW_COUNT] PROGMEM = {
+  {
+    "  BlastOS v0.1  ",
+    "Config Main Menu",
+    "Global Settings ",
+    "Velocities      ",
+    "Modes           ",
+    "About           ",
+    "Slider&Button to",
+    "Navigate&Select ",
+  },
+  {
+    "Global Settings ",
+    "< Back           ",
+    "Max DPS: ??     ",
+    "PusherTime: ??ms",
+    "BattCellCount: ?",
+    "Coasting: 99.0% ",  //  < 0%, 80-99.5%
+    "Comp Lock: ???  ",  // < Off, P1, P2, P3
+    "P?: ????        ",
+    //"RevOffTimeS: ???", // < max 1s",
+  },
+  {
+    "   Velocities   ",
+    "< Back          ",
+    "Low:    ????    ",
+    "Medium: ????    ",
+    "High:   ????    ",
+    "                ",
+    "                ",
+    "Trigger Enabled ",
+  },
+  {
+    "     Modes      ",
+    "< Back          ",
+    "Edit Profile 1  ",
+    "Edit Profile 2  ",
+    "Edit Profile 3  ",
+    "                ",
+    "                ",
+    "                ",
+  },
+  {
+    " Edit Profile 1 ",
+    "< Back          ",
+    "DPS: 12         ",
+    "Fract Vel: 50%  ",
+    "Mode: Burst3    ",
+    "Lefty Mode: Off ",
+    "                ",
+    "                ",
+  },
+  {
+    "     About      ",
+    "< Back          ",
+    "  BlastOS v0.1  ",
+    "  by m0useCat   ",
+    "QR CODE QR CODE-",
+    "QR CODE QR CODE-",
+    "QR CODE QR CODE-",
+    "QR CODE QR CODE-:",
+  }
+};
+uint8_t cursorBounds[CONFIGPAGECOUNT][2] = {
+  { 1, 5 },
+};
+uint8_t cursorAddress[2] = { 1, 1 };
 
 struct UIMgr {
   ScreenMgr& scrMgr;
@@ -720,12 +771,70 @@ struct UIMgr {
     //scrMgr.setText("DPS", 5, 8); // Only need once.
 
     scrMgr.setSprite(101, 7, 5);
-    scrMgr.setText(getVoltageText(analogRead(PINVOLTAGE)), 7, 6);
+    uint16_t voltage = map(analogRead(PINVOLTAGE), 0, 1023, 0, HWMAXVOLTAGE);
+    scrMgr.setText(voltageToCharArray(voltage), 7, 6);
     //scrMgr.setText("v", 7, 10); // Only need once.
+
+    if (voltage < globalState.minVoltage) {
+      globalState.isUnsafeVoltage = true;
+      scrMgr.setText("!LOW BATT! ", 6, 3);
+    } else if (voltage > globalState.maxVoltage) {
+      globalState.isUnsafeVoltage = true;
+      scrMgr.setText("!HIGH BATT!", 6, 3);
+    } else {
+      globalState.isUnsafeVoltage = false;
+      scrMgr.setText("                ", 6, 0);
+    }
+
+    if (updateScr) scrMgr.updateScreen();
+  }
+  drawConfigPageBase(uint8_t page) {
+    for (int i = 0; i < ROW_COUNT; i++) {
+      scrMgr.setText(configMenuTexts[page][i], page);
+    }
+  }
+  drawConfigPageDetails(uint8_t page) {
+    switch (page) {
+      case 0:
+        //scrMgr.setText();
+        break;
+      case 1:
+        scrMgr.setText(globalParams.maxDPS, 2, 9);
+        scrMgr.setText(globalParams.noidOnTime, 3, 12);
+        scrMgr.setText(globalParams.cellCount, 4, 15);
+        //scrMgr.setText(globalParams.decayMultiplier, 5, 10);
+        break;
+      case 2:
+        //scrMgr.setText();
+        break;
+      case 3:
+        //scrMgr.setText();
+        break;
+      case 4:
+        //scrMgr.setText();
+        break;
+      case 5:
+        //scrMgr.setText();
+        break;
+      case 6:
+        //scrMgr.setText();
+        break;
+    }
+  }
+  drawConfigPage(uint8_t page) {
+    drawConfigPageBase(page);
+    drawConfigPageDetails(page);
+  }
+  initConfig(bool updateScr = true) {
+
+    if (updateScr) scrMgr.updateScreen();
+  }
+  updateConfig(bool updateScr = true) {
 
     if (updateScr) scrMgr.updateScreen();
   }
 };
+
 
 // 3. Global State & Defaults
 Servo esc;
@@ -744,7 +853,6 @@ Debounceable debounceableTrigger;
 Debounceable debounceableMenu;
 Haptic haptic = Haptic();
 SingleAction btnAction = SingleAction();
-
 ScreenMgr screenMgr;
 UIMgr UI{ screenMgr, globalParams, firingProfiles, globalState };
 
@@ -756,9 +864,9 @@ uint8_t getSelectorIndex() {
 
 char* getBootModeText(uint8_t index) {
   switch (index) {
-    case 0: return "Power: Mid";
-    case 1: return "Power: Low";
-    case 2: return "Power: High";
+    case 0: return "Mid Power";
+    case 1: return "Low Power";
+    case 2: return "High Power";
   }
 }
 
@@ -776,11 +884,6 @@ char* getDPSText() {
   return numToCharArray(dps, 2);  //concat(numToCharArray(dps), "DPS");
 }
 
-char* getVoltageText(uint16_t voltage) {
-  voltage = map(voltage, 0, 1023, 0, HWMAXVOLTAGE);
-  return voltageToCharArray(voltage);
-}
-
 ProfileParams getCurrentFiringProfile() {
   return firingProfiles[globalState.currentFiringProfileIndex];
 }
@@ -795,13 +898,25 @@ void updateNoidOffTime() {
   globalState.noidOffTime = (1000.f / getCurrentFiringProfile().noidDPS) - globalParams.noidOnTime;
 }
 
+void initMinMaxVoltage() {
+  globalState.minVoltage = globalParams.minPerCell * globalParams.cellCount;
+  globalState.maxVoltage = globalParams.maxPerCell * globalParams.cellCount;
+}
+
+void initCalcdDecayMultiplier() {
+  globalState.calcdDecayMultiplier = float(globalParams.decayMultiplier) * 0.01f;
+}
+
+bool isSafetyLockout() {
+  return globalParams.enableVoltageSafetyLockout && globalState.isUnsafeVoltage;
+}
+
 // 4. Core Methods
 
 void printTileMap() {
   for (uint8_t page = 0; page < 8; ++page) {
     for (uint8_t col = 0; col < 16; ++col) {
       char* showVal = numToCharArray(screenMgr.getTileMapAt(page, col), 3);
-      //Serial.print(tileMap[page][col], DEC);
       Serial.print(showVal);
       Serial.print(' ');
     }
@@ -843,13 +958,12 @@ void initESC() {
   esc.writeMicroseconds(WHEELMINSPEED);
 }
 
-//HapticController hapticController = HapticController(3, 12);
-
 void resetCycle() {
   globalState.cycleStartTime = millis();
 }
 
 bool getCyclingLogic() {
+  if (isSafetyLockout()) return false;
   if (!debounceableTrigger.isDebounced()) return globalState.noidState;  // if not debounced, return previous value
   bool pusherOn = false;
   bool isTriggerPulled = getDigitalPin(PINTRIG);
@@ -890,16 +1004,16 @@ bool getCyclingLogic() {
 }
 
 uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return int with the rev speed.
+  if (isSafetyLockout()) return false;
   if (revOrTrigIsActive) {
     globalState.currentRevSpeed =
       isMenuPressed ? (((globalState.targetVelocity - WHEELMINSPEED) * getCurrentFiringProfile().fracVelMultiplier) + WHEELMINSPEED) : globalState.targetVelocity;
   } else {
     if (globalState.isStealthModeEnabled || !ENABLEDECAY) globalState.currentRevSpeed = WHEELMINSPEED;
-    else globalState.currentRevSpeed = ((globalState.currentRevSpeed - WHEELMINSPEED) * globalParams.decayMultiplier) + WHEELMINSPEED;
+    else globalState.currentRevSpeed = ((globalState.currentRevSpeed - WHEELMINSPEED) * globalState.calcdDecayMultiplier) + WHEELMINSPEED;
   }
   return globalState.currentRevSpeed;
 }
-
 bool isRevOrTrigActive() {
   return getDigitalPin(PINREV) || getDigitalPin(PINTRIG);
 }
@@ -929,7 +1043,7 @@ void updateFiringProfileIndex() {
   globalState.currentFiringProfileIndex = getSelectorIndex();
 }
 
-bool execInterval(unsigned long interval = 5000) {
+bool execInterval(unsigned long interval = 2000) {
   static unsigned long lastToggle = 0;
   unsigned long now = millis();
   if (now - lastToggle >= interval) {
@@ -944,6 +1058,11 @@ bool shouldScreenUpdate(bool isProfileChanged, bool revOrTrigIsActive, bool isMe
   if (revOrTrigIsActive) return false;
   if (isMenuPressed) return false;
   return execInterval();
+}
+
+void initParams() {
+  initMinMaxVoltage();
+  initCalcdDecayMultiplier();
 }
 
 void bootStandardLoop() {
@@ -969,8 +1088,10 @@ void bootStandardLoop() {
 }
 
 void bootConfigLoop() {
+  static bool previousIsMenuPressed;
   bool isMenuPressed = getDigitalPin(PINMENU);
-  if (isMenuPressed) {
+  if (isMenuPressed != previousIsMenuPressed) {}
+  /*if (isMenuPressed) {
     if (debounceableMenu.isDebounced()) {
       haptic.start();
     }
@@ -979,30 +1100,29 @@ void bootConfigLoop() {
     if (haptic.isDone()) {
       haptic.reset();
     }
-  }
-  globalState.previousIsMenuPressed = isMenuPressed;
+  }*/
+  previousIsMenuPressed = isMenuPressed;
   setDigitalPin(PINPUSHER, haptic.getUpdatedStatus());
+  setDigitalPin(LED_BUILTIN, haptic.getUpdatedStatus());
 }
 
 // 5. setup() and loop()
 void setup() {
+  initParams();
   screenMgr.initDisplay();
-  //screenMgr.cycleSprites();
-  //setText("Hello World!", 3, 2);
-  //screenMgr.updateScreen();
-
   assignPins();
-  updateNoidOffTime();
-  initBootVelocity();
-
   globalState.useMode = getBootMode();  // WIP boot mode implementation
-
   initESC();  // bind and arm the ESC's for PWM mode
 
-  //digitalWrite(LED_BUILTIN, LOW); //disable built-in LED
   updateFiringProfileIndex();
-  UI.initStatus();
-  UI.updateStatus();
+  if (globalState.useMode != UseBootMode::BOOTCONFIG) {
+    updateNoidOffTime();
+    initBootVelocity();
+    UI.initStatus();
+    UI.updateStatus();
+  } else {
+    
+  }
   Serial.begin(9600);
   Serial.println("Welcome to BlastOS");
   Serial.println(getBootModeLogString());
