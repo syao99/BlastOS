@@ -696,13 +696,15 @@ const char* const configMenuTexts[CONFIGPAGECOUNT][ROW_COUNT] PROGMEM = {
 uint8_t cursorBounds[CONFIGPAGECOUNT][2] = {
   { 1, 5 },
 };
-uint8_t cursorAddress[2] = { 1, 1 };
+
 
 struct UIMgr {
   ScreenMgr& scrMgr;
   GlobalParams& globalParams;
   ProfileParams& profileParams;
   GlobalState& globalState;
+  uint8_t currentPage = 0;
+  uint8_t currentItem = 0;
   UIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState)
     : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) {}
   initStatus(bool updateScr = true) {
@@ -775,14 +777,15 @@ struct UIMgr {
   }
   drawConfigPage(uint8_t page) {
     drawConfigPageBase(page);
-    drawConfigPageDetails(page);
+    //drawConfigPageDetails(page);
   }
   initConfig(bool updateScr = true) {
 
     if (updateScr) scrMgr.updateScreen();
   }
   updateConfig(bool updateScr = true) {
-
+    drawConfigPage(currentPage);
+    //update cursor
     if (updateScr) scrMgr.updateScreen();
   }
 };
@@ -1089,6 +1092,7 @@ void setup() {
     UI.initStatus();
     UI.updateStatus();
   } else {
+    UI.updateConfig();
   }
 #if DEBUGMODE
   Serial.begin(9600);
