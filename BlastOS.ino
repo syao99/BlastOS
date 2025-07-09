@@ -618,17 +618,17 @@ struct StatusUIMgr {
 };
 
 /*
-enum class ItemType : uint8_t { SubMenu,
-                                EditValue,
-                                Action };
+enum class MenuItemBehavior : uint8_t { TEXTONLY, SUBPAGE,
+                                EDITPROPERTY,
+                                ACTION };
 struct MenuItemP {
   PGM_P label;                   // flash pointer to null-term string
-  ItemType type;                 // one byte
-  uint8_t minVal, maxVal, step;  // for EditValue
+  MenuItemBehavior type;                 // one byte
+  uint8_t minVal, maxVal, step;  // for edit property
   union {
-    uint16_t pageIndex;  // for SubMenu
-    void (*actionFn)();  // for Action
-    uint16_t* editPtr;   // for EditValue (pointer into RAM)
+    uint16_t pageIndex;  // for sub page
+    void (*actionFn)();  // for action
+    uint16_t* editPtr;   // for edit property (pointer into RAM)
   } param;
 };
 static const MenuItemP menuItems[] PROGMEM = {
@@ -643,12 +643,12 @@ static const MenuItemP menuItems[] PROGMEM = {
 #define CONFIG_PAGE_COUNT 7
 static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] PROGMEM = {
   {
-    "  BlastOS v0.1  ",
-    "Config Main Menu",
+    "BlastOS MainMenu",
     " Global Settings",
     " Velocities     ",
     " Modes          ",
     " About          ",
+    " Save & Restart ",
     "Slider & Menu to",
     "Nav & Select    ",
   },
@@ -670,7 +670,7 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     " High:   ????   ",
     "                ",
     "                ",
-    "Trigger Enabled ",
+    "                ",
   },
   {
     "     Modes      ",
@@ -698,9 +698,9 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     "  by m0useCat   ",
     "                ",
     " Go Back        ",
+    "                ",
+    "                ",
     " Factory Reset  ",
-    "                ",
-    "                ",
   },
   {
     " Factory Reset  ",
@@ -719,12 +719,12 @@ char* getConfigMenuText(uint8_t page, uint8_t row) {
   return buf;
 }
 const uint8_t configMenuBounds[CONFIG_PAGE_COUNT][2] = {
-  { 2, 5 }, { 1, 6 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 1, 1 }
+  { 1, 5 }, { 1, 6 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 1, 1 }
 };
 const uint8_t* getConfigMenuBounds(uint8_t page) {
   return configMenuBounds[page];
 }
-enum class editableProperty : uint8_t {
+/*enum class editableProperty : uint8_t {
   NONE,
   GLOBAL_MAXDPS,
   GLOBAL_NOIDTIME,
@@ -737,7 +737,7 @@ enum class editableProperty : uint8_t {
   PROFILE_DPS,
   PROFILE_FRACVEL,
   PROFILE_MODE,
-};
+};*/
 struct ConfigUIMgr {
   ScreenMgr& scrMgr;
   GlobalParams& globalParams;
@@ -745,8 +745,9 @@ struct ConfigUIMgr {
   GlobalState& globalState;
   const uint16_t* bootVelocities;
   uint8_t currentPage = 0;
-  uint8_t cursorIdx = 2;
-  editableProperty currentPropertyEdit = editableProperty::NONE;
+  uint8_t cursorIdx = 1;
+  //editableProperty currentPropertyEdit = editableProperty::NONE;
+  void* currentPropertyEdit = nullptr;
   uint8_t currentProfileEdit = 255;
   ConfigUIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState, uint16_t* bVel)
     : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState), bootVelocities(bVel) {}
@@ -791,10 +792,10 @@ struct ConfigUIMgr {
   }
   void updateConfig(uint8_t cursorDirection = 255, bool updateScr = true) {
     if (cursorDirection == 0) {
-      if (currentPropertyEdit == editableProperty::NONE) configMenuAction(currentPage, cursorIdx);  //perform menu item action
-      else setPropertyEdit(editableProperty::NONE);
+      if (!currentPropertyEdit) configMenuAction(currentPage, cursorIdx);  //perform menu item action
+      else setPropertyEdit(nullptr);
     }
-    if (currentPropertyEdit != editableProperty::NONE) {
+    if (currentPropertyEdit) {
       drawConfigPageDetails(currentPage);
       return;
     }
@@ -826,25 +827,19 @@ struct ConfigUIMgr {
   void setPage(uint8_t newPage) {
     //cursorIdx = getConfigMenuBounds(newPage)[0]; //might have to set this case by case or actually start doing proper data structs
     switch (newPage) {
-      case 0: cursorIdx = constrain(currentPage + 1, getConfigMenuBounds(0)[0], getConfigMenuBounds(0)[1]); break;
+      case 0: cursorIdx = constrain(currentPage, getConfigMenuBounds(0)[0], getConfigMenuBounds(0)[1]); break;
       default: cursorIdx = getConfigMenuBounds(newPage)[0]; break;
     }
     currentPage = newPage;
   }
   void configMenuAction(uint8_t page, uint8_t action) {
     switch (page) {
-      case 0:
-        switch (action) {
-          case 2: setPage(1); return;
-          case 3: setPage(2); return;
-          case 4: setPage(3); return;
-          case 5: setPage(4); return;
-        }
+      case 0: setPage(action);
         return;
       case 1:
         switch (action) {
           case 1: setPage(0); return;
-          case 2: return;
+          case 2: return;//setPropertyEdit(); return;
           case 3: return;
           case 4: return;
         }
@@ -883,14 +878,14 @@ struct ConfigUIMgr {
         return;
     }
   }
-  void setPropertyEdit(editableProperty newProperty) {
-    if (newProperty == editableProperty::NONE)  //clear invert
+  void setPropertyEdit(void* newProperty = nullptr) {
+    if (!newProperty)  //clear invert
 
       currentPropertyEdit = newProperty;
   }
   void handlePropertyEdit() {
     static uint8_t previousCursorIdx = 255;
-    if (currentPropertyEdit == editableProperty::NONE) return;
+    if (!currentPropertyEdit) return;
     if (previousCursorIdx < ROW_COUNT) scrMgr.invertAt(cursorIdx);
     scrMgr.invertAt(cursorIdx);
     previousCursorIdx = cursorIdx;
