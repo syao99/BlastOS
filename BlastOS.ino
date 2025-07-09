@@ -5,9 +5,9 @@ By m0useCat
 
 Table of Contents (use ctrl-f):
 1. Pinout
-2. Data Types
+2. Types, Core Structs, Required Helpers
 3. Global State & Defaults
-4. Helpers
+4. Other Helpers
 5. Core Methods
 6. setup() and loop()
 
@@ -51,7 +51,7 @@ implement config UI
 //#define EEPROMOFFSET 24  // max 1000, add 24 if EEPROM issues occur. 24 may actually need to be a different value depending on save config data
 const char* versionText = "BlastOS v0.1";
 
-// 2. Types
+// 2. Types, Core Structs, Required Helpers
 enum class UseBootMode : uint8_t { BOOTMID,
                                    BOOTFRONT,
                                    BOOTBACK,
@@ -475,9 +475,6 @@ struct ScreenMgr {
         if (row > ROW_LAST) break;
         if (col > COL_LAST) break;
         setTileMapAt(idx++, row, col);
-#if DEBUGMODE
-        Serial.println(idx);
-#endif
         //tileMap[row][col] = idx++;
       }
     }
@@ -523,7 +520,6 @@ char* numToTextPrepend(uint16_t num, char prepend = '_') {
   // Return pointer to the start of the result
   return &buf[pos];
 }
-
 char* numToText(uint16_t num) {
   static char buf[6];  // max "65535"+'\0'
   uint8_t pos = sizeof(buf) - 1;
@@ -581,11 +577,9 @@ char* voltageToText(uint16_t voltage,
   }
   return &buf[pos];
 }
-void concat(char* dest, const char* src) {
-  while (*dest) dest++;
-  while (*src) *dest++ = *src++;
-  *dest = '\0';
-}
+
+
+
 
 #define CONFIG_PAGE_COUNT 7
 static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] PROGMEM = {
@@ -963,7 +957,7 @@ bool isSafetyLockout() {
   return globalParams.enableVoltageSafetyLockout && globalState.isUnsafeVoltage;
 }
 
-// 4. Helpers
+// 4. Other Helpers
 
 uint8_t simpleWrap(uint8_t val, int8_t direction, uint8_t min, uint8_t max) {
   if (direction > 0) {
