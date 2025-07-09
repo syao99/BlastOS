@@ -577,9 +577,68 @@ char* voltageToText(uint16_t voltage,
   }
   return &buf[pos];
 }
+struct StatusUIMgr {
+  ScreenMgr& scrMgr;
+  GlobalParams& globalParams;
+  ProfileParams& profileParams;
+  GlobalState& globalState;
+  StatusUIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState)
+    : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) {}
+  void initStatus(bool updateScr = true) {
+    scrMgr.setText(versionText, 0, 2);
+    scrMgr.setText(globalState.bootModeText, 1, 3);
+    scrMgr.setSprite(102, 3, 5);
+    scrMgr.setText(numToText(globalState.targetVelocity), 3, 6);
+    scrMgr.setSprite(106, 4, 5);
+    scrMgr.setSprite(103, 5, 5);
+    scrMgr.setText("DPS", 5, 8);
+    scrMgr.setText("v", 7, 11);
+    if (updateScr) scrMgr.updateScreen();
+  }
+  void updateStatus(bool updateScr = true) {
+    uint8_t mode = getCurrentFiringProfile().firingMode;
+    scrMgr.setText(getModeText(mode), 4, 6);
+    if (mode > 1 && mode < 255) scrMgr.setText(numToText(mode, 1), 4, 11);
+    scrMgr.setText(getDPSText(), 5, 6);
+    scrMgr.setSprite(101, 7, 5);
+    uint16_t voltage = map(analogRead(PINVOLTAGE), 0, 1023, 0, HWMAXVOLTAGE);
+    scrMgr.setText(voltageToText(voltage), 7, 6);
+    if (voltage < globalState.minVoltage) {
+      globalState.isUnsafeVoltage = true;
+      scrMgr.setText("!LOW BATT! ", 6, 3);
+    } else if (voltage > globalState.maxVoltage) {
+      globalState.isUnsafeVoltage = true;
+      scrMgr.setText("!HIGH BATT!", 6, 3);
+    } else {
+      globalState.isUnsafeVoltage = false;
+      scrMgr.setText("                ", 6, 0);
+    }
+    if (updateScr) scrMgr.updateScreen();
+  }
+};
 
+/*
+enum class ItemType : uint8_t { SubMenu,
+                                EditValue,
+                                Action };
+struct MenuItemP {
+  PGM_P label;                   // flash pointer to null-term string
+  ItemType type;                 // one byte
+  uint8_t minVal, maxVal, step;  // for EditValue
+  union {
+    uint16_t pageIndex;  // for SubMenu
+    void (*actionFn)();  // for Action
+    uint16_t* editPtr;   // for EditValue (pointer into RAM)
+  } param;
+};
+static const MenuItemP menuItems[] PROGMEM = {
+  { F("Settings"), ItemType::SubMenu, { 0, 0, 0 }, .param.pageIndex = 1 },
+  { F("Brightness"), ItemType::EditValue, { 0, 255, 1 }, .param.editPtr = &globalParams.brightness },
+  { F("Reset"), ItemType::Action, { 0, 0, 0 }, .param.actionFn = rebootDevice },
+  // …
+};*/
 
-
+/**/
 
 #define CONFIG_PAGE_COUNT 7
 static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] PROGMEM = {
@@ -659,7 +718,6 @@ char* getConfigMenuText(uint8_t page, uint8_t row) {
   strcpy_P(buf, configMenuTexts[page][row]);
   return buf;
 }
-
 const uint8_t configMenuBounds[CONFIG_PAGE_COUNT][2] = {
   { 2, 5 }, { 1, 6 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 1, 1 }
 };
@@ -680,50 +738,18 @@ enum class editableProperty : uint8_t {
   PROFILE_FRACVEL,
   PROFILE_MODE,
 };
-uint16_t bootVelocities[] = { 1600, 1450, 2000 };
-struct UIMgr {
+struct ConfigUIMgr {
   ScreenMgr& scrMgr;
   GlobalParams& globalParams;
   ProfileParams& profileParams;
   GlobalState& globalState;
-  //const uint16_t* bootVelocities;
+  const uint16_t* bootVelocities;
   uint8_t currentPage = 0;
   uint8_t cursorIdx = 2;
   editableProperty currentPropertyEdit = editableProperty::NONE;
   uint8_t currentProfileEdit = 255;
-  UIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState /*, uint16_t* bVel*/)
-    : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) /*, bootVelocities(bVel)*/ {}
-  void initStatus(bool updateScr = true) {
-    scrMgr.setText(versionText, 0, 2);
-    scrMgr.setText(globalState.bootModeText, 1, 3);
-    scrMgr.setSprite(102, 3, 5);
-    scrMgr.setText(numToText(globalState.targetVelocity), 3, 6);
-    scrMgr.setSprite(106, 4, 5);
-    scrMgr.setSprite(103, 5, 5);
-    scrMgr.setText("DPS", 5, 8);
-    scrMgr.setText("v", 7, 11);
-    if (updateScr) scrMgr.updateScreen();
-  }
-  void updateStatus(bool updateScr = true) {
-    uint8_t mode = getCurrentFiringProfile().firingMode;
-    scrMgr.setText(getModeText(mode), 4, 6);
-    if (mode > 1 && mode < 255) scrMgr.setText(numToText(mode, 1), 4, 11);
-    scrMgr.setText(getDPSText(), 5, 6);
-    scrMgr.setSprite(101, 7, 5);
-    uint16_t voltage = map(analogRead(PINVOLTAGE), 0, 1023, 0, HWMAXVOLTAGE);
-    scrMgr.setText(voltageToText(voltage), 7, 6);
-    if (voltage < globalState.minVoltage) {
-      globalState.isUnsafeVoltage = true;
-      scrMgr.setText("!LOW BATT! ", 6, 3);
-    } else if (voltage > globalState.maxVoltage) {
-      globalState.isUnsafeVoltage = true;
-      scrMgr.setText("!HIGH BATT!", 6, 3);
-    } else {
-      globalState.isUnsafeVoltage = false;
-      scrMgr.setText("                ", 6, 0);
-    }
-    if (updateScr) scrMgr.updateScreen();
-  }
+  ConfigUIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState, uint16_t* bVel)
+    : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState), bootVelocities(bVel) {}
   void drawConfigPageBase(uint8_t page) {
     Serial.println("try get config menu text:");
     for (uint8_t i = 0; i < ROW_COUNT; ++i) {
@@ -871,7 +897,6 @@ struct UIMgr {
   }
 };
 
-
 // 3. Global State & Defaults
 Servo esc;
 
@@ -883,14 +908,15 @@ ProfileParams firingProfiles[] = {  // dps, fvMulti, mode i.e. 0: safe, 1: semi,
   { ProfileParams(globalParams.maxDPS, 0.5f, 1) },
   { ProfileParams(globalParams.maxDPS, 0.5f, 255) }
 };
-
+uint16_t bootVelocities[] = { 1600, 1450, 2000 };
 GlobalState globalState;
 Debounceable debounceableTrigger;
 Debounceable debounceableMenu;
 Haptic haptic = Haptic();
 SingleAction btnAction = SingleAction();
 ScreenMgr screenMgr;
-UIMgr UI{ screenMgr, globalParams, firingProfiles, globalState /*, *bootVelocities*/ };
+StatusUIMgr StatusUI{ screenMgr, globalParams, firingProfiles, globalState };
+ConfigUIMgr ConfigUI{ screenMgr, globalParams, firingProfiles, globalState, bootVelocities };
 
 uint8_t getSelectorIndex() {
   if (getDigitalPin(PINSELECT1)) return 1;
@@ -1143,7 +1169,7 @@ void bootStandardLoop() {
   setDigitalPin(LED_BUILTIN, cyclingLogic);
 #endif
   if (globalState.isStealthModeEnabled != previousIsStealthModeEnabled && globalState.isStealthModeEnabled) screenMgr.screenClear();
-  if (!globalState.isStealthModeEnabled && shouldScreenUpdate(isProfileChanged, revOrTrigIsActive, isMenuPressed)) UI.updateStatus();
+  if (!globalState.isStealthModeEnabled && shouldScreenUpdate(isProfileChanged, revOrTrigIsActive, isMenuPressed)) StatusUI.updateStatus();
   globalState.previousFiringProfileIndex = globalState.currentFiringProfileIndex;
   previousIsMenuPressed = isMenuPressed;
   previousIsStealthModeEnabled = globalState.isStealthModeEnabled;
@@ -1158,7 +1184,7 @@ void bootConfigLoop() {
       if (debounceableMenu.isDebounced()) {
         if (haptic.allowAction()) {
           uint8_t selection = getSelectorIndex();
-          UI.updateConfig(selection);
+          ConfigUI.updateConfig(selection);
           haptic.start();
         }
       }
@@ -1186,10 +1212,10 @@ void setup() {
   updateFiringProfileIndex();
   if (globalState.useMode != UseBootMode::BOOTCONFIG) {
     initBootVelocity();
-    UI.initStatus();
-    UI.updateStatus();
+    StatusUI.initStatus();
+    StatusUI.updateStatus();
   } else {
-    UI.updateConfig();
+    ConfigUI.updateConfig();
   }
 #if DEBUGMODE
   Serial.begin(9600);
