@@ -7,14 +7,16 @@ Table of Contents (use ctrl-f):
 1. Pinout
 2. Data Types
 3. Global State & Defaults
-4. Core Methods
-5. setup() and loop()
+4. Helpers
+5. Core Methods
+6. setup() and loop()
 
 */
 //#define CTWI_USING_BLOCKING_ACCESS
 
 #include <Servo.h>  // PWM output to ESC's
 #include <nI2C.h>   // Screen
+//#include <avr/pgmspace.h>
 //#include <EEPROM.h> // Save/load profiles
 
 /*
@@ -124,7 +126,7 @@ struct Haptic {
   uint16_t cycleTime;
   uint16_t duration;
   unsigned long elapsed;
-  Haptic(uint8_t count = 3, uint16_t on = 6, uint16_t off = 6)
+  Haptic(uint8_t count = 2, uint16_t on = 6, uint16_t off = 6)
     : cycleCount(count),
       onTime(on),
       offTime(off) {}
@@ -144,11 +146,13 @@ struct Haptic {
     if (isDone()) return false;
     state = (elapsed % cycleTime) < onTime;
     return state;
-    // verify logical premise in js browser console:
-    //for (i = 0; i < 100; i++) console.log((i % 10) < 4);
+    // verify logic in js browser console: for (i = 0; i < 100; ++i) console.log((i % 10) < 4);
   }
   void reset() {
     isActive = false;
+  }
+  bool allowAction() {
+    return (!isActive);
   }
 };
 struct SingleAction {
@@ -164,7 +168,7 @@ struct SingleAction {
   }
 };
 
-const uint8_t spriteSheet[128][8] PROGMEM = {
+static const uint8_t spriteSheet[128][8] PROGMEM = {
   [0] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },    // ' '
   [1] = { 0x00, 0x7c, 0xfe, 0x92, 0x8a, 0xfe, 0x7c, 0x00 },    // '0'
   [2] = { 0x00, 0x00, 0x02, 0xfe, 0xfe, 0x42, 0x00, 0x00 },    // '1'
@@ -214,7 +218,7 @@ const uint8_t spriteSheet[128][8] PROGMEM = {
   [46] = { 0x00, 0xbe, 0xbf, 0x01, 0x01, 0x07, 0x06, 0x00 },   // 'j'
   [47] = { 0x00, 0x22, 0x36, 0x1c, 0x08, 0xfe, 0xfe, 0x00 },   // 'k'
   [48] = { 0x00, 0x00, 0x02, 0xfe, 0xfe, 0x82, 0x00, 0x00 },   // 'l'
-  [49] = { 0x00, 0x18, 0x3e, 0x3e, 0x18, 0x3e, 0x3e, 0x00 },   // 'm'
+  [49] = { 0x1E, 0x3E, 0x20, 0x3E, 0x3E, 0x20, 0x3E, 0x3E },   // 'm'
   [50] = { 0x00, 0x1e, 0x3e, 0x20, 0x20, 0x3e, 0x3e, 0x00 },   // 'n'
   [51] = { 0x00, 0x1c, 0x3e, 0x22, 0x22, 0x3e, 0x1c, 0x00 },   // 'o'
   [52] = { 0x00, 0x18, 0x3c, 0x24, 0x24, 0x3f, 0x3f, 0x00 },   // 'p'
@@ -260,10 +264,10 @@ const uint8_t spriteSheet[128][8] PROGMEM = {
   [92] = { 0x00, 0x00, 0x00, 0xee, 0xee, 0x00, 0x00, 0x00 },   // '|'
   [93] = { 0x00, 0x10, 0x10, 0x7c, 0xee, 0x82, 0x82, 0x00 },   // '}'
   [94] = { 0x00, 0x80, 0xc0, 0x40, 0xc0, 0x80, 0xc0, 0x40 },   // '~'
-  [95] = { 0x10, 0x30, 0x70, 0xF0, 0xF0, 0x70, 0x30, 0x10 },   // Triangle UpD
-  [96] = { 0x18, 0x3C, 0x7E, 0xFF, 0x00, 0x00, 0x00, 0x00 },   // Triangle RightL
-  [97] = { 0x08, 0x0C, 0x0E, 0x0F, 0x0F, 0x0E, 0x0C, 0x08 },   // Triangle DownU
-  [98] = { 0x00, 0x00, 0x00, 0x00, 0xFF, 0x7E, 0x3C, 0x18 },   // Triangle LeftR
+  [95] = { 0x10, 0x30, 0x70, 0xF0, 0xF0, 0x70, 0x30, 0x10 },   // Triangle Up
+  [96] = { 0x18, 0x3C, 0x7E, 0xFF, 0x00, 0x00, 0x00, 0x00 },   // Triangle Right
+  [97] = { 0x08, 0x0C, 0x0E, 0x0F, 0x0F, 0x0E, 0x0C, 0x08 },   // Triangle Down
+  [98] = { 0x00, 0x00, 0x00, 0x00, 0xFF, 0x7E, 0x3C, 0x18 },   // Triangle Left
   [99] = { 0x00, 0x18, 0x3C, 0x24, 0x24, 0x24, 0x24, 0x3C },   // Battery
   [100] = { 0x1C, 0x3E, 0x22, 0x22, 0x22, 0x22, 0x22, 0x3E },  // Battery2
   [101] = { 0x00, 0x18, 0x1E, 0x1F, 0xF8, 0x78, 0x18, 0x00 },  // Power
@@ -394,7 +398,6 @@ struct ScreenMgr {
   void updateScreen() {
     updateScreenFromTilemap(spriteSheet);
   }
-
   uint8_t charToTileID(char c) {
     if (c == ' ') return 0;
     if (c >= '0' && c <= '9') return 1 + (c - '0');   // '0'→1 … '9'→10
@@ -436,8 +439,6 @@ struct ScreenMgr {
       default: return 0;
     }
   }
-
-
   void truncateText(char* text, uint8_t limit) {
     if (limit == 0) {
       text[0] = '\0';
@@ -448,26 +449,16 @@ struct ScreenMgr {
     }
     text[limit] = '\0';
   }
-
-
   // Render a text string at given row, start column:
   void setText(const char* text, uint8_t row, uint8_t startCol = 0) {
     for (uint8_t i = 0; text[i] && startCol + i < COL_COUNT; ++i) {
-      //row = constrain(row, 0, ROW_LAST);
-      //uint8_t useCol = constrain(startCol + i, 0, COL_LAST);
       if (!setTileMapAt(charToTileID(text[i]), row, startCol + i)) return;
-      //tileMap[row][useCol] = charToTileID(text[i]);
     }
   }
-
   void setSprite(uint8_t sprite, uint8_t row, uint8_t col) {
-    //row = constrain(row, 0, ROW_LAST);
-    //col = constrain(col, 0, COL_LAST);
-    //tileMap[row][col] = sprite;
     setTileMapAt(sprite, row, col);
   }
-
-  void invertAt(uint8_t row, uint8_t col, uint8_t span) {
+  void invertAt(uint8_t row, uint8_t col = 0, uint8_t span = COL_LAST) {
     // clamp span so col+span ≤ 16
     if (col > COL_LAST) return;
     if (row > ROW_LAST) return;
@@ -476,64 +467,30 @@ struct ScreenMgr {
       tileMap[row][col + i] ^= 0x80;
     }
   }
-
-  void cycleSprites() {
+  void cycleSprites(bool update = true) {
+    Serial.println("test cyclespr");
     uint8_t idx = 0;
-    for (uint8_t row = 0; row < 8; ++row) {
-      for (uint8_t col = 0; col < 16; ++col) {
-        //tileMap[ROW_LAST-row][COL_LAST-col] = idx++;
+    for (uint8_t row = 0; row < ROW_COUNT; ++row) {
+      for (uint8_t col = 0; col < COL_COUNT; ++col) {
         if (row > ROW_LAST) break;
         if (col > COL_LAST) break;
-        tileMap[row][col] = idx++;
+        setTileMapAt(idx++, row, col);
+#if DEBUGMODE
+        Serial.println(idx);
+#endif
+        //tileMap[row][col] = idx++;
       }
     }
+    if (update) updateScreen();
   }
-
-  void setupTileMapHelloWorld() {
-    // Clear all to blank (0)
-    for (uint8_t row = 0; row < 8; ++row)
-      for (uint8_t tx = 0; tx < 16; ++tx)
-        tileMap[row][tx] = 0;
-
-    // "Hello World" length: 11 chars
-    // Place horizontally centered on row 3 (row 3)
-    // Center horizontally: (16 - 11) / 2 = 2.5 → start at tile 2 or 3
-    uint8_t startX = 2;
-    uint8_t row = 3;
-
-    const char* text = "Hello World";
-
-    // ASCII ' ' = 32; in spriteSheet indices, '0' starts at 1 for '0',
-    // uppercase 'A' starts at 11, lowercase 'a' at 37
-    for (uint8_t i = 0; text[i] != 0 && (startX + i) < 16; ++i) {
-      char c = text[i];
-      uint8_t tileId = 0;
-
-      if (c >= '0' && c <= '9')
-        tileId = 1 + (c - '0');  // digits 1–10
-      else if (c >= 'A' && c <= 'Z')
-        tileId = 11 + (c - 'A');  // uppercase letters
-      else if (c >= 'a' && c <= 'z')
-        tileId = 37 + (c - 'a');  // lowercase letters
-      else if (c == ' ')
-        tileId = 0;  // blank
-      else if (c == '!')
-        tileId = 63;  // exclamation mark example
-      else
-        tileId = 0;  // fallback blank
-
-      tileMap[row][startX + i] = tileId;
-    }
-  }
-
-  void setCheckers() {
+  void setCheckers(bool update = true) {
     for (uint8_t row = 0; row < ROW_COUNT; ++row) {
       for (uint8_t col = 0; col < COL_COUNT; ++col) {
         tileMap[row][col] = ((row + col) & 1) ? 0x80 : 0x00;
       }
     }
+    if (update) updateScreen();
   }
-
   void loopInvertAll(bool update = true) {
     static uint32_t lastToggle = 0;
     const uint32_t interval = 500;
@@ -550,20 +507,21 @@ struct ScreenMgr {
     }
   }
 };
+
 char* numToTextPrepend(uint16_t num, char prepend = '_') {
-    // Allow space for up to 5 digits + 1 prepend char + null terminator
-    static char buf[7];
-    uint8_t pos = sizeof(buf) - 1;
-    buf[pos] = '\0';
-    // Fill in digits from the end
-    do {
-        buf[--pos] = '0' + (num % 10);
-        num /= 10;
-    } while (num);
-    // Prepend the specified character
-    buf[--pos] = prepend;
-    // Return pointer to the start of the result
-    return &buf[pos];
+  // Allow space for up to 5 digits + 1 prepend char + null terminator
+  static char buf[7];
+  uint8_t pos = sizeof(buf) - 1;
+  buf[pos] = '\0';
+  // Fill in digits from the end
+  do {
+    buf[--pos] = '0' + (num % 10);
+    num /= 10;
+  } while (num);
+  // Prepend the specified character
+  buf[--pos] = prepend;
+  // Return pointer to the start of the result
+  return &buf[pos];
 }
 
 char* numToText(uint16_t num) {
@@ -595,8 +553,8 @@ char* numToText(uint16_t num, uint8_t minWidth) {
   return &buf[pos];
 }
 char* voltageToText(uint16_t voltage,
-                         uint8_t decimalPlacement = 2,
-                         uint8_t minWidth = 2) {
+                    uint8_t decimalPlacement = 2,
+                    uint8_t minWidth = 2) {
   if (voltage > 9999) voltage = 9999;
   static char buf[8];  // enough for "65535.00\0"
   const uint8_t MAX_IDX = sizeof(buf) - 1;
@@ -629,85 +587,109 @@ void concat(char* dest, const char* src) {
   *dest = '\0';
 }
 
-uint8_t globalSettingsData[] = { 2 };
-#define CONFIGPAGECOUNT 6
-const char* const configMenuTexts[CONFIGPAGECOUNT][ROW_COUNT] PROGMEM = {
+#define CONFIG_PAGE_COUNT 6
+static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] PROGMEM = {
   {
     "  BlastOS v0.1  ",
     "Config Main Menu",
-    "Global Settings ",
-    "Velocities      ",
-    "Modes           ",
-    "About           ",
-    "Slider&Button to",
-    "Navigate&Select ",
+    " Global Settings",
+    " Velocities     ",
+    " Modes          ",
+    " About          ",
+    "Slider & Menu to",
+    "Nav & Select    ",
   },
   {
     "Global Settings ",
-    "< Back          ",
-    "Max DPS: ??     ",
-    "PusherTime: ??ms",
-    "BattCellCount: ?",
-    "Coasting: 99.0% ",  //  < 0%, 80-99.5%
-    "Comp Lock: ???  ",  // < Off, P1, P2, P3
+    " Go Back        ",
+    " Max DPS: ??    ",
+    " Noid Time: ??ms",
+    " CellCount: ?   ",
+    " Coasting: ??%  ",  //  < 0%, 80-99.5%
+    " Comp Lock: ??? ",  // < Off, P1, P2, P3
     "P?: ????        ",  //"RevOffTimeS: ???", // < max 1s",
   },
   {
     "   Velocities   ",
-    "< Back          ",
-    "Low:    ????    ",
-    "Medium: ????    ",
-    "High:   ????    ",
+    " Go Back        ",
+    " Low:    ????   ",
+    " Medium: ????   ",
+    " High:   ????   ",
     "                ",
     "                ",
     "Trigger Enabled ",
   },
   {
     "     Modes      ",
-    "< Back          ",
-    "Edit Profile 1  ",
-    "Edit Profile 2  ",
-    "Edit Profile 3  ",
+    " Go Back        ",
+    " Edit Profile 1 ",
+    " Edit Profile 2 ",
+    " Edit Profile 3 ",
     "                ",
     "                ",
     "                ",
   },
   {
     " Edit Profile 1 ",
-    "< Back          ",
-    "DPS: 12         ",
-    "Fract Vel: 50%  ",
-    "Mode: Burst3    ",
-    "Lefty Mode: Off ",
+    " Go Back        ",
+    " DPS: 12        ",
+    " Fract Vel: 50% ",
+    " Mode: Burst3   ",
+    "                ",  // <" Lefty Mode: Off",
     "                ",
     "                ",
   },
   {
     "     About      ",
-    "< Back          ",
+    " Go Back        ",
     "  BlastOS v0.1  ",
     "  by m0useCat   ",
     "QR CODE QR CODE-",
     "QR CODE QR CODE-",
     "QR CODE QR CODE-",
-    "QR CODE QR CODE-:",
+    "QR CODE QR CODE-",
   }
 };
-uint8_t cursorBounds[CONFIGPAGECOUNT][2] = {
-  { 1, 5 },
-};
+char* getConfigMenuText(uint8_t page, uint8_t row) {
+  static char buf[COL_COUNT + 1];
+  strcpy_P(buf, configMenuTexts[page][row]);
+  return buf;
+}
 
+const uint8_t configMenuBounds[CONFIG_PAGE_COUNT][2] = {
+  { 2, 5 }, { 1, 6 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 1, 1 }
+};
+const uint8_t* getConfigMenuBounds(uint8_t page) {
+  return configMenuBounds[page];
+}
+enum class editableProperty : uint8_t {
+  NONE,
+  GLOBAL_MAXDPS,
+  GLOBAL_NOIDTIME,
+  GLOBAL_CELLCOUNT,
+  GLOBAL_COASTING,
+  GLOBAL_COMPLOCK,
+  VEL_LOW,
+  VEL_MID,
+  VEL_HIGH,
+  PROFILE_DPS,
+  PROFILE_FRACVEL,
+  PROFILE_MODE,
+};
 
 struct UIMgr {
   ScreenMgr& scrMgr;
   GlobalParams& globalParams;
   ProfileParams& profileParams;
   GlobalState& globalState;
+  const uint16_t* bootVelocities;
   uint8_t currentPage = 0;
-  uint8_t currentItem = 0;
-  UIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState)
-    : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) {}
-  initStatus(bool updateScr = true) {
+  uint8_t cursorIdx = 2;
+  editableProperty currentPropertyEdit = editableProperty::NONE;
+  uint8_t currentProfileEdit = 255;
+  UIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState, uint16_t* bVel)
+    : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState), bootVelocities(bVel) {}
+  void initStatus(bool updateScr = true) {
     scrMgr.setText(versionText, 0, 2);
     scrMgr.setText(globalState.bootModeText, 1, 3);
     scrMgr.setSprite(102, 3, 5);
@@ -718,17 +700,14 @@ struct UIMgr {
     scrMgr.setText("v", 7, 11);
     if (updateScr) scrMgr.updateScreen();
   }
-  updateStatus(bool updateScr = true) {
+  void updateStatus(bool updateScr = true) {
     uint8_t mode = getCurrentFiringProfile().firingMode;
     scrMgr.setText(getModeText(mode), 4, 6);
     if (mode > 1 && mode < 255) scrMgr.setText(numToText(mode, 1), 4, 11);
-
     scrMgr.setText(getDPSText(), 5, 6);
-
     scrMgr.setSprite(101, 7, 5);
     uint16_t voltage = map(analogRead(PINVOLTAGE), 0, 1023, 0, HWMAXVOLTAGE);
     scrMgr.setText(voltageToText(voltage), 7, 6);
-
     if (voltage < globalState.minVoltage) {
       globalState.isUnsafeVoltage = true;
       scrMgr.setText("!LOW BATT! ", 6, 3);
@@ -739,27 +718,28 @@ struct UIMgr {
       globalState.isUnsafeVoltage = false;
       scrMgr.setText("                ", 6, 0);
     }
-
     if (updateScr) scrMgr.updateScreen();
   }
-  drawConfigPageBase(uint8_t page) {
-    for (int i = 0; i < ROW_COUNT; i++) {
-      scrMgr.setText(configMenuTexts[page][i], page);
+  void drawConfigPageBase(uint8_t page) {
+    Serial.println("try get config menu text:");
+    for (uint8_t i = 0; i < ROW_COUNT; ++i) {
+      scrMgr.setText(getConfigMenuText(currentPage, i), i, 0);
     }
   }
-  drawConfigPageDetails(uint8_t page) {
+  void drawConfigPageDetails(uint8_t page) {
     switch (page) {
-      case 0:
-        break;
+      case 0: break;
       case 1:
-        scrMgr.setText(globalParams.maxDPS, 2, 9);
-        scrMgr.setText(globalParams.noidOnTime, 3, 12);
-        scrMgr.setText(globalParams.cellCount, 4, 15);
-        scrMgr.setText(globalParams.decayMultiplier, 5, 10);
-        scrMgr.setText(globalParams.compLockProfile, 6, 11);
+        scrMgr.setText(numToText(globalParams.maxDPS), 2, 10);
+        scrMgr.setText(numToText(globalParams.noidOnTime), 3, 12);
+        scrMgr.setText(numToText(globalParams.cellCount), 4, 12);
+        scrMgr.setText(numToText(globalParams.decayMultiplier), 5, 11);
+        scrMgr.setText(getCompLockProfileText(globalParams.compLockProfile), 6, 12);
         break;
       case 2:
-        //scrMgr.setText();
+        scrMgr.setText(numToText(bootVelocities[1]), 2, 9);
+        scrMgr.setText(numToText(bootVelocities[0]), 3, 9);
+        scrMgr.setText(numToText(bootVelocities[2]), 4, 9);
         break;
       case 3:
         //scrMgr.setText();
@@ -775,18 +755,138 @@ struct UIMgr {
         break;
     }
   }
-  drawConfigPage(uint8_t page) {
+  void drawConfigPage(uint8_t page) {
     drawConfigPageBase(page);
-    //drawConfigPageDetails(page);
+    drawConfigPageDetails(page);
   }
-  initConfig(bool updateScr = true) {
-
-    if (updateScr) scrMgr.updateScreen();
-  }
-  updateConfig(bool updateScr = true) {
+  void updateConfig(uint8_t cursorDirection = 255, bool updateScr = true) {
+    if (cursorDirection == 0) {
+      configMenuAction(currentPage, cursorIdx);  //perform menu item action
+    }
     drawConfigPage(currentPage);
-    //update cursor
+    if (cursorDirection == 255) {
+      scrMgr.setText(">", cursorIdx, 0);
+      if (updateScr) scrMgr.updateScreen();
+      return;
+    }
+    updateCursor(cursorDirection);
+    handlePropertyEdit();
     if (updateScr) scrMgr.updateScreen();
+  }
+  void updateCursor(uint8_t direction) {
+    if (direction == 0) {
+      scrMgr.setText(">", cursorIdx, 0);  // draw cursor w/o moving it.
+      return;
+    }
+    scrMgr.setText(" ", cursorIdx, 0);
+    cursorIdx = getUpdatedCursorIdx(direction);
+    scrMgr.setText(">", cursorIdx, 0);
+  }
+  uint8_t getUpdatedCursorIdx(uint8_t direction) {
+    const uint8_t* bounds = getConfigMenuBounds(currentPage);
+    if (direction == 2) return simpleWrap(cursorIdx, 1, bounds[0], bounds[1]);
+    else if (direction == 1) return simpleWrap(cursorIdx, -1, bounds[0], bounds[1]);
+    else return 255;
+  }
+  void setPage(uint8_t newPage) {
+    //cursorIdx = getConfigMenuBounds(newPage)[0]; //might have to set this case by case or actually start doing proper data structs
+    switch (newPage) {
+      case 0: cursorIdx = constrain(currentPage + 1, getConfigMenuBounds(0)[0], getConfigMenuBounds(0)[1]); break;
+      default: cursorIdx = getConfigMenuBounds(newPage)[0]; break;
+    }
+    currentPage = newPage;
+  }
+  void configMenuAction(uint8_t page, uint8_t action) {
+    switch (page) {
+      case 0:
+        switch (action) {
+          case 2: setPage(1); return;
+          case 3: setPage(2); return;
+          case 4: setPage(3); return;
+          case 5: setPage(4); return;
+        }
+        return;
+      case 1:
+        switch (action) {
+          case 1: setPage(0); return;
+          case 2:
+
+            return;
+          case 3:
+
+            return;
+          case 4:
+
+            return;
+        }
+        return;
+      case 2:
+        switch (action) {
+          case 1: setPage(0); return;
+          case 2:
+
+            return;
+          case 3:
+
+            return;
+          case 4:
+
+            return;
+        }
+        return;
+      case 3:
+        switch (action) {
+          case 1: setPage(0); return;
+          case 2:
+
+            return;
+          case 3:
+
+            return;
+          case 4:
+
+            return;
+        }
+        return;
+      case 4:
+        switch (action) {
+          case 1: setPage(0); return;
+          case 2:
+
+            return;
+          case 3:
+
+            return;
+          case 4:
+
+            return;
+        }
+        return;
+      case 5:
+        switch (action) {
+          case 1: setPage(0); return;
+          case 2:
+
+            return;
+          case 3:
+
+            return;
+          case 4:
+
+            return;
+        }
+        return;
+    }
+  }
+  void setPropertyEdit(editableProperty newProperty) {
+    currentPropertyEdit = newProperty;
+  }
+  void handlePropertyEdit() {
+    static uint8_t previousCursorIdx = 255;
+    if (currentPropertyEdit == editableProperty::NONE) return;
+    if (previousCursorIdx < ROW_COUNT) scrMgr.invertAt(cursorIdx);
+    scrMgr.invertAt(cursorIdx);
+    previousCursorIdx = cursorIdx;
   }
 };
 
@@ -809,7 +909,7 @@ Debounceable debounceableMenu;
 Haptic haptic = Haptic();
 SingleAction btnAction = SingleAction();
 ScreenMgr screenMgr;
-UIMgr UI{ screenMgr, globalParams, firingProfiles, globalState };
+UIMgr UI{ screenMgr, globalParams, firingProfiles, globalState, *bootVelocities };
 
 uint8_t getSelectorIndex() {
   if (getDigitalPin(PINSELECT1)) return 1;
@@ -839,13 +939,13 @@ char* getDPSText() {
   return numToText(dps, 2);
 }
 
-char* getCompLockProfileText() {
-  uint8_t profile = globalParams.compLockProfile;
+char* getCompLockProfileText(uint8_t profile) {
   switch (profile) {
     case 0: return "Off";
-    default: {
-      return numToTextPrepend(profile, 'P');
-    }
+    default:
+      {
+        return numToTextPrepend(profile, 'P');
+      }
   }
 }
 
@@ -876,7 +976,28 @@ bool isSafetyLockout() {
   return globalParams.enableVoltageSafetyLockout && globalState.isUnsafeVoltage;
 }
 
-// 4. Core Methods
+// 4. Helpers
+
+uint8_t simpleWrap(uint8_t val, int8_t direction, uint8_t min, uint8_t max) {
+  if (direction > 0) {
+    if (val >= max) return min;
+    else return constrain(val + direction, min, max);
+  } else if (direction < 0) {
+    if (val <= min) return max;
+    else return constrain(val + direction, min, max);
+  }
+  return val;
+}
+
+bool getDigitalPin(uint8_t pin) {
+  return digitalRead(pin) == LOW;
+}
+
+void setDigitalPin(uint8_t pin, bool isActive) {
+  digitalWrite(pin, isActive);
+}
+
+// 5. Core Methods
 
 void printTileMap() {
   for (uint8_t page = 0; page < 8; ++page) {
@@ -888,14 +1009,6 @@ void printTileMap() {
     Serial.println();
   }
   Serial.println();
-}
-
-bool getDigitalPin(uint8_t pin) {
-  return digitalRead(pin) == LOW;
-}
-
-void setDigitalPin(uint8_t pin, bool isActive) {
-  digitalWrite(pin, isActive);
 }
 
 void assignPins() {
@@ -910,11 +1023,12 @@ void assignPins() {
   pinMode(PINPUSHER, OUTPUT);
 }
 
-UseBootMode getBootMode() {
-  if (getDigitalPin(PINMENU)) return UseBootMode::BOOTCONFIG;
+UseBootMode getBootModeIdx() {
+  /*if (getDigitalPin(PINMENU)) return UseBootMode::BOOTCONFIG;
   if (getDigitalPin(PINSELECT1)) return UseBootMode::BOOTFRONT;
   if (getDigitalPin(PINSELECT2)) return UseBootMode::BOOTBACK;
-  return UseBootMode::BOOTMID;
+  return UseBootMode::BOOTMID;*/
+  return UseBootMode::BOOTCONFIG;
 }
 
 void initESC() {
@@ -997,10 +1111,8 @@ const char* getBootModeLogString() {
   switch (globalState.useMode) {
     case UseBootMode::BOOTCONFIG:
       return "Boot to config.";
-      break;
     default:
       return "Boot normally.";
-      break;
   }
 }
 
@@ -1059,17 +1171,21 @@ void bootStandardLoop() {
 void bootConfigLoop() {
   static bool previousIsMenuPressed;
   bool isMenuPressed = getDigitalPin(PINMENU);
-  if (isMenuPressed != previousIsMenuPressed) {}
-  /*if (isMenuPressed) {
-    if (debounceableMenu.isDebounced()) {
-      haptic.start();
+  if (isMenuPressed != previousIsMenuPressed) {
+    uint8_t selectorIdx = getSelectorIndex();
+    if (isMenuPressed) {
+      if (debounceableMenu.isDebounced()) {
+        if (haptic.allowAction()) {
+          uint8_t selection = getSelectorIndex();
+          UI.updateConfig(selection);
+          haptic.start();
+        }
+      }
+    } else {
+      debounceableMenu.resetDebounce();
+      if (haptic.isDone()) haptic.reset();
     }
-  } else {
-    debounceableMenu.resetDebounce();
-    if (haptic.isDone()) {
-      haptic.reset();
-    }
-  }*/
+  }
   previousIsMenuPressed = isMenuPressed;
   setDigitalPin(PINPUSHER, haptic.getUpdatedStatus());
 #if DEBUGMODE
@@ -1077,17 +1193,17 @@ void bootConfigLoop() {
 #endif
 }
 
-// 5. setup() and loop()
+// 6. setup() and loop()
 void setup() {
   initParams();
   screenMgr.initDisplay();
   assignPins();
-  globalState.useMode = getBootMode();  // WIP boot mode implementation
-  initESC();                            // bind and arm the ESC's for PWM mode
+  globalState.useMode = getBootModeIdx();  // WIP boot mode implementation
+  initESC();
+  updateNoidOffTime();
 
   updateFiringProfileIndex();
   if (globalState.useMode != UseBootMode::BOOTCONFIG) {
-    updateNoidOffTime();
     initBootVelocity();
     UI.initStatus();
     UI.updateStatus();
