@@ -587,7 +587,7 @@ void concat(char* dest, const char* src) {
   *dest = '\0';
 }
 
-#define CONFIG_PAGE_COUNT 6
+#define CONFIG_PAGE_COUNT 7
 static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] PROGMEM = {
   {
     "  BlastOS v0.1  ",
@@ -641,13 +641,23 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
   },
   {
     "     About      ",
-    " Go Back        ",
     "  BlastOS v0.1  ",
     "  by m0useCat   ",
-    "QR CODE QR CODE-",
-    "QR CODE QR CODE-",
-    "QR CODE QR CODE-",
-    "QR CODE QR CODE-",
+    "                ",
+    " Go Back        ",
+    " Factory Reset  ",
+    "                ",
+    "                ",
+  },
+  {
+    " Factory Reset  ",
+    " This will wipe ",
+    "  all settings  ",
+    "  and can't be  ",
+    "    undone.     ",
+    "   Continue?    ",
+    " No             ",
+    " Yes            ",
   }
 };
 char* getConfigMenuText(uint8_t page, uint8_t row) {
@@ -676,19 +686,19 @@ enum class editableProperty : uint8_t {
   PROFILE_FRACVEL,
   PROFILE_MODE,
 };
-
+uint16_t bootVelocities[] = { 1600, 1450, 2000 };
 struct UIMgr {
   ScreenMgr& scrMgr;
   GlobalParams& globalParams;
   ProfileParams& profileParams;
   GlobalState& globalState;
-  const uint16_t* bootVelocities;
+  //const uint16_t* bootVelocities;
   uint8_t currentPage = 0;
   uint8_t cursorIdx = 2;
   editableProperty currentPropertyEdit = editableProperty::NONE;
   uint8_t currentProfileEdit = 255;
-  UIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState, uint16_t* bVel)
-    : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState), bootVelocities(bVel) {}
+  UIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState /*, uint16_t* bVel*/)
+    : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) /*, bootVelocities(bVel)*/ {}
   void initStatus(bool updateScr = true) {
     scrMgr.setText(versionText, 0, 2);
     scrMgr.setText(globalState.bootModeText, 1, 3);
@@ -761,7 +771,12 @@ struct UIMgr {
   }
   void updateConfig(uint8_t cursorDirection = 255, bool updateScr = true) {
     if (cursorDirection == 0) {
-      configMenuAction(currentPage, cursorIdx);  //perform menu item action
+      if (currentPropertyEdit == editableProperty::NONE) configMenuAction(currentPage, cursorIdx);  //perform menu item action
+      else setPropertyEdit(editableProperty::NONE);
+    }
+    if (currentPropertyEdit != editableProperty::NONE) {
+      drawConfigPageDetails(currentPage);
+      return;
     }
     drawConfigPage(currentPage);
     if (cursorDirection == 255) {
@@ -809,77 +824,49 @@ struct UIMgr {
       case 1:
         switch (action) {
           case 1: setPage(0); return;
-          case 2:
-
-            return;
-          case 3:
-
-            return;
-          case 4:
-
-            return;
+          case 2: return;
+          case 3: return;
+          case 4: return;
         }
         return;
       case 2:
         switch (action) {
           case 1: setPage(0); return;
-          case 2:
-
-            return;
-          case 3:
-
-            return;
-          case 4:
-
-            return;
+          case 2: return;
+          case 3: return;
+          case 4: return;
         }
         return;
       case 3:
         switch (action) {
           case 1: setPage(0); return;
-          case 2:
-
-            return;
-          case 3:
-
-            return;
-          case 4:
-
-            return;
+          case 2: return;
+          case 3: return;
+          case 4: return;
         }
         return;
       case 4:
         switch (action) {
           case 1: setPage(0); return;
-          case 2:
-
-            return;
-          case 3:
-
-            return;
-          case 4:
-
-            return;
+          case 2: return;
+          case 3: return;
+          case 4: return;
         }
         return;
       case 5:
         switch (action) {
           case 1: setPage(0); return;
-          case 2:
-
-            return;
-          case 3:
-
-            return;
-          case 4:
-
-            return;
+          case 2: return;
+          case 3: return;
+          case 4: return;
         }
         return;
     }
   }
   void setPropertyEdit(editableProperty newProperty) {
-    currentPropertyEdit = newProperty;
+    if (newProperty == editableProperty::NONE)  //clear invert
+
+      currentPropertyEdit = newProperty;
   }
   void handlePropertyEdit() {
     static uint8_t previousCursorIdx = 255;
@@ -902,14 +889,14 @@ ProfileParams firingProfiles[] = {  // dps, fvMulti, mode i.e. 0: safe, 1: semi,
   { ProfileParams(globalParams.maxDPS, 0.5f, 1) },
   { ProfileParams(globalParams.maxDPS, 0.5f, 255) }
 };
-uint16_t bootVelocities[] = { 1600, 1450, 2000 };
+
 GlobalState globalState;
 Debounceable debounceableTrigger;
 Debounceable debounceableMenu;
 Haptic haptic = Haptic();
 SingleAction btnAction = SingleAction();
 ScreenMgr screenMgr;
-UIMgr UI{ screenMgr, globalParams, firingProfiles, globalState, *bootVelocities };
+UIMgr UI{ screenMgr, globalParams, firingProfiles, globalState /*, *bootVelocities*/ };
 
 uint8_t getSelectorIndex() {
   if (getDigitalPin(PINSELECT1)) return 1;
