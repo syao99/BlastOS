@@ -458,13 +458,13 @@ struct ScreenMgr {
   void setSprite(uint8_t sprite, uint8_t row, uint8_t col) {
     setTileMapAt(sprite, row, col);
   }
-  void invertAt(uint8_t row, uint8_t col = 0, uint8_t span = COL_LAST) {
+  void invertSpan(uint8_t row, uint8_t col = 0, uint8_t span = COL_LAST) {
     // clamp span so col+span ≤ 16
-    if (col > COL_LAST) return;
-    if (row > ROW_LAST) return;
+    if (col > COL_LAST) col = COL_LAST;
+    if (row > ROW_LAST) row = ROW_LAST;
     uint8_t maxSpan = (col + span > COL_COUNT ? COL_COUNT - col : span);
     for (uint8_t i = 0; i < maxSpan; ++i) {
-      tileMap[row][col + i] ^= 0x80;
+      invertTileMapAt(row, col + i);
     }
   }
   void cycleSprites(bool update = true) {
@@ -617,13 +617,13 @@ struct StatusUIMgr {
   }
 };
 
-/*
-enum class MenuItemBehavior : uint8_t { TEXTONLY, SUBPAGE,
+
+/*enum class MenuItemBehavior : uint8_t { TEXTONLY, SUBPAGE,
                                 EDITPROPERTY,
                                 ACTION };
 struct MenuItemP {
   PGM_P label;                   // flash pointer to null-term string
-  MenuItemBehavior type;                 // one byte
+  MenuItemBehavior behaviors[3];
   uint8_t minVal, maxVal, step;  // for edit property
   union {
     uint16_t pageIndex;  // for sub page
@@ -637,8 +637,6 @@ static const MenuItemP menuItems[] PROGMEM = {
   { F("Reset"), ItemType::Action, { 0, 0, 0 }, .param.actionFn = rebootDevice },
   // …
 };*/
-
-/**/
 
 #define CONFIG_PAGE_COUNT 7
 static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] PROGMEM = {
@@ -724,20 +722,7 @@ const uint8_t configMenuBounds[CONFIG_PAGE_COUNT][2] = {
 const uint8_t* getConfigMenuBounds(uint8_t page) {
   return configMenuBounds[page];
 }
-/*enum class editableProperty : uint8_t {
-  NONE,
-  GLOBAL_MAXDPS,
-  GLOBAL_NOIDTIME,
-  GLOBAL_CELLCOUNT,
-  GLOBAL_COASTING,
-  GLOBAL_COMPLOCK,
-  VEL_LOW,
-  VEL_MID,
-  VEL_HIGH,
-  PROFILE_DPS,
-  PROFILE_FRACVEL,
-  PROFILE_MODE,
-};*/
+
 struct ConfigUIMgr {
   ScreenMgr& scrMgr;
   GlobalParams& globalParams;
@@ -752,7 +737,6 @@ struct ConfigUIMgr {
   ConfigUIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState, uint16_t* bVel)
     : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState), bootVelocities(bVel) {}
   void drawConfigPageBase(uint8_t page) {
-    Serial.println("try get config menu text:");
     for (uint8_t i = 0; i < ROW_COUNT; ++i) {
       scrMgr.setText(getConfigMenuText(currentPage, i), i, 0);
     }
@@ -792,11 +776,22 @@ struct ConfigUIMgr {
   }
   void updateConfig(uint8_t cursorDirection = 255, bool updateScr = true) {
     if (cursorDirection == 0) {
-      if (!currentPropertyEdit) configMenuAction(currentPage, cursorIdx);  //perform menu item action
-      else setPropertyEdit(nullptr);
+      if (!currentPropertyEdit) {
+        configMenuAction(currentPage, cursorIdx);  //perform menu item action
+      } else {
+        setPropertyEdit(nullptr);
+      };
     }
     if (currentPropertyEdit) {
-      drawConfigPageDetails(currentPage);
+      if (cursorDirection == 0) {
+        scrMgr.invertSpan(cursorIdx);
+      }
+      if (cursorDirection == 1 || cursorDirection == 2) {
+        bool useDir = cursorDirection == 1;
+        editCurrentProperty(useDir, currentPage, cursorIdx);
+        drawConfigPageDetails(currentPage);
+      }
+      if (updateScr) scrMgr.updateScreen();
       return;
     }
     drawConfigPage(currentPage);
@@ -806,7 +801,6 @@ struct ConfigUIMgr {
       return;
     }
     updateCursor(cursorDirection);
-    handlePropertyEdit();
     if (updateScr) scrMgr.updateScreen();
   }
   void updateCursor(uint8_t direction) {
@@ -832,14 +826,15 @@ struct ConfigUIMgr {
     }
     currentPage = newPage;
   }
-  void configMenuAction(uint8_t page, uint8_t action) {
+  void configMenuAction(uint8_t page, uint8_t action) { // <-here
     switch (page) {
-      case 0: setPage(action);
+      case 0:
+        setPage(action);
         return;
       case 1:
         switch (action) {
           case 1: setPage(0); return;
-          case 2: return;//setPropertyEdit(); return;
+          case 2: setPropertyEdit(&globalParams.maxDPS); return;
           case 3: return;
           case 4: return;
         }
@@ -879,16 +874,24 @@ struct ConfigUIMgr {
     }
   }
   void setPropertyEdit(void* newProperty = nullptr) {
-    if (!newProperty)  //clear invert
-
-      currentPropertyEdit = newProperty;
+    currentPropertyEdit = newProperty;
   }
-  void handlePropertyEdit() {
-    static uint8_t previousCursorIdx = 255;
-    if (!currentPropertyEdit) return;
-    if (previousCursorIdx < ROW_COUNT) scrMgr.invertAt(cursorIdx);
-    scrMgr.invertAt(cursorIdx);
-    previousCursorIdx = cursorIdx;
+  void editCurrentProperty(bool direction, uint8_t page, uint8_t cursorIdx) {  // <-here
+    //currentPropertyEdit
+    int8_t dirMultiplier = direction ? 1 : -1;
+    Serial.println("EDIT PROPERTY");
+    switch (page) {
+      case 1:
+        switch (cursorIdx) {
+          case 2:
+            uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
+            *useVal = simpleWrap(*useVal, dirMultiplier, 1, 30); //val, dir, min, max
+            Serial.println(numToText(*useVal));
+            Serial.println(numToText(globalParams.maxDPS));
+            break;
+        }
+        break;
+    }
   }
 };
 
@@ -909,9 +912,9 @@ Debounceable debounceableTrigger;
 Debounceable debounceableMenu;
 Haptic haptic = Haptic();
 SingleAction btnAction = SingleAction();
-ScreenMgr screenMgr;
-StatusUIMgr StatusUI{ screenMgr, globalParams, firingProfiles, globalState };
-ConfigUIMgr ConfigUI{ screenMgr, globalParams, firingProfiles, globalState, bootVelocities };
+ScreenMgr scrMgr;
+StatusUIMgr StatusUI{ scrMgr, globalParams, firingProfiles, globalState };
+ConfigUIMgr ConfigUI{ scrMgr, globalParams, firingProfiles, globalState, bootVelocities };
 
 uint8_t getSelectorIndex() {
   if (getDigitalPin(PINSELECT1)) return 1;
@@ -991,6 +994,17 @@ uint8_t simpleWrap(uint8_t val, int8_t direction, uint8_t min, uint8_t max) {
   return val;
 }
 
+uint16_t simpleWrap(uint16_t val, int8_t direction, uint16_t min, uint16_t max) {
+  if (direction > 0) {
+    if (val >= max) return min;
+    else return constrain(val + direction, min, max);
+  } else if (direction < 0) {
+    if (val <= min) return max;
+    else return constrain(val + direction, min, max);
+  }
+  return val;
+}
+
 bool getDigitalPin(uint8_t pin) {
   return digitalRead(pin) == LOW;
 }
@@ -1004,7 +1018,7 @@ void setDigitalPin(uint8_t pin, bool isActive) {
 void printTileMap() {
   for (uint8_t page = 0; page < 8; ++page) {
     for (uint8_t col = 0; col < 16; ++col) {
-      char* showVal = numToText(screenMgr.getTileMapAt(page, col), 3);
+      char* showVal = numToText(scrMgr.getTileMapAt(page, col), 3);
       Serial.print(showVal);
       Serial.print(' ');
     }
@@ -1163,7 +1177,7 @@ void bootStandardLoop() {
 #if DEBUGMODE
   setDigitalPin(LED_BUILTIN, cyclingLogic);
 #endif
-  if (globalState.isStealthModeEnabled != previousIsStealthModeEnabled && globalState.isStealthModeEnabled) screenMgr.screenClear();
+  if (globalState.isStealthModeEnabled != previousIsStealthModeEnabled && globalState.isStealthModeEnabled) scrMgr.screenClear();
   if (!globalState.isStealthModeEnabled && shouldScreenUpdate(isProfileChanged, revOrTrigIsActive, isMenuPressed)) StatusUI.updateStatus();
   globalState.previousFiringProfileIndex = globalState.currentFiringProfileIndex;
   previousIsMenuPressed = isMenuPressed;
@@ -1171,6 +1185,7 @@ void bootStandardLoop() {
 }
 
 void bootConfigLoop() {
+  //scrMgr.loopInvertAll();
   static bool previousIsMenuPressed;
   bool isMenuPressed = getDigitalPin(PINMENU);
   if (isMenuPressed != previousIsMenuPressed) {
@@ -1198,7 +1213,7 @@ void bootConfigLoop() {
 // 6. setup() and loop()
 void setup() {
   initParams();
-  screenMgr.initDisplay();
+  scrMgr.initDisplay();
   assignPins();
   globalState.useMode = getBootModeIdx();  // WIP boot mode implementation
   initESC();
