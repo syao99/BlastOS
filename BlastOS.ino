@@ -855,7 +855,7 @@ struct ConfigUIMgr {
         if (action >= 1 && action <= 3) setPage(action);
         switch (action) {
           case 4: setPage(5); return;
-          case 5: return;
+          case 5: reboot(); return;
         }
         return;
       case 1:  // global
@@ -1015,7 +1015,7 @@ uint8_t getSelectorIndex() {
   return 0;
 }
 
-char* getBootModeText(uint8_t index) {
+char* getBootModeText(uint8_t index, bool useCompLock = false) {
   switch (index) {
     case 0: return "Mid Power";
     case 1: return "Low Power";
@@ -1040,6 +1040,9 @@ char* getDPSText() {
 char* getCompLockProfileText(uint8_t profile) {
   switch (profile) {
     case 0: return "Off";
+    case 1: return "Low";
+    case 2: return "Mid";
+    case 3: return "Hi ";
     default:
       {
         return numToTextPrependAppend(profile, 'P');
@@ -1053,8 +1056,10 @@ ProfileParams getCurrentFiringProfile() {
 
 void initBootVelocity() {
   uint8_t bootSelectorIndex = getSelectorIndex();
+  bool isCompLockEnabled = globalParams.compLockProfile > 0;
+  if (isCompLockEnabled) bootSelectorIndex = globalParams.compLockProfile - 1;
   globalState.targetVelocity = bootVelocities[bootSelectorIndex];
-  globalState.bootModeText = getBootModeText(bootSelectorIndex);
+  globalState.bootModeText = getBootModeText(bootSelectorIndex, isCompLockEnabled);
 }
 
 void updateNoidOffTime() {
@@ -1139,12 +1144,11 @@ void assignPins() {
 }
 
 UseBootMode getBootModeIdx() {
-  /*if (globalParams.compLockProfile != 0) idfk
   if (getDigitalPin(PINMENU)) return UseBootMode::BOOTCONFIG;
   if (getDigitalPin(PINSELECT1)) return UseBootMode::BOOTFRONT;
   if (getDigitalPin(PINSELECT2)) return UseBootMode::BOOTBACK;
-  return UseBootMode::BOOTMID;*/
-  return UseBootMode::BOOTCONFIG;
+  return UseBootMode::BOOTMID;
+  //return UseBootMode::BOOTCONFIG;
 }
 
 void initESC() {
@@ -1320,32 +1324,54 @@ void bootConfigLoop() {
 #if DEBUGMODE
     setDigitalPin(LED_BUILTIN, cyclingLogic);
 #endif
-  }
+  } else esc.writeMicroseconds(WHEELMINSPEED);
 }
 
-// 6. setup() and loop()
-void setup() {
-  initParams();
-  scrMgr.initDisplay();
-  assignPins();
-  globalState.useMode = getBootModeIdx();  // WIP boot mode implementation
-  initESC();
-  updateNoidOffTime();
+void save() {
 
+}
+
+void load() {
+  
+}
+
+void reboot() {
+  delay(500);
+  setupWrapped(false);
+}
+
+void setupWrapped(bool firstTime = true) {
+  if (firstTime) {
+    scrMgr.initDisplay();
+    assignPins();
+  }
+
+  initParams();
+  globalState.useMode = getBootModeIdx();  // WIP boot mode implementation
+  updateNoidOffTime();
   updateFiringProfileIndex();
   if (globalState.useMode != UseBootMode::BOOTCONFIG) {
     initBootVelocity();
     StatusUI.initStatus();
     StatusUI.updateStatus();
+    globalState.isBootConfigLockout = false;
   } else {
     globalState.isBootConfigLockout = true;
     ConfigUI.updateConfig();
   }
+
+  initESC();
+
 #if DEBUGMODE
   Serial.begin(9600);
   Serial.println("Welcome to BlastOS");
   Serial.println(getBootModeLogString());
 #endif
+}
+
+// 6. setup() and loop()
+void setup() {
+  setupWrapped();
 }
 
 void loop() {
