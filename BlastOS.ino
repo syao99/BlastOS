@@ -79,25 +79,23 @@ struct GlobalParams {
   uint8_t maxDPS = 20;
   uint8_t noidOnTime = 25;
   uint8_t compLockProfile = 0;  // 0 disabled, 1/2/3 for corresponding profiles
-
   uint8_t cellCount = 4;
-
   uint8_t decayMultiplier = 99;
   GlobalParams() {}
 };
 struct ProfileParams {
   uint8_t noidDPS;
-  float fracVelMultiplier;
+  uint8_t fracVelPercentage;
   uint8_t firingMode;  // 0: safe, 1: semi, 2-254: burst, 255: auto
   //bool leftyMode = false;
   ProfileParams(
     uint8_t DPS = 12,
-    float fvMultiplier = 0.5f,
+    uint8_t fvMultiplier = 50,
     uint8_t mode = 3  //,
     //bool left = false
     )
     : noidDPS(DPS),
-      fracVelMultiplier(fvMultiplier),
+      fracVelPercentage(fvMultiplier),
       firingMode(mode) {}
 };
 struct GlobalState {
@@ -120,6 +118,7 @@ struct GlobalState {
   bool isUnsafeVoltage = true;
   bool isBootConfigLockout = false;
   float calcdDecayMultiplier;
+  float calcdFracVelMultiplier[3];
 };
 struct Haptic {
   unsigned long startTime = 0;
@@ -648,6 +647,7 @@ static const MenuItemP menuItems[] PROGMEM = {
 #define CONFIG_PAGE_COUNT 7
 static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] PROGMEM = {
   {
+    //0
     "BlastOS MainMenu",
     " Global Settings",
     " Velocities     ",
@@ -658,6 +658,7 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     "Nav & Select    ",
   },
   {
+    //1
     "Global Settings ",
     " Go Back        ",
     " Max DPS: ??    ",
@@ -668,6 +669,7 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     "                ",  // P?: ???? // "RevOffTimeS: ???", // < max 1s",
   },
   {
+    //2
     "   Velocities   ",
     " Go Back        ",
     " Low:    ????   ",
@@ -678,6 +680,7 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     "                ",
   },
   {
+    //3
     "     Modes      ",
     " Go Back        ",
     " Edit Profile 1 ",
@@ -688,6 +691,7 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     "                ",
   },
   {
+    //4
     " Edit Profile 1 ",
     " Go Back        ",
     " DPS: 12        ",
@@ -698,6 +702,7 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     "                ",
   },
   {
+    //5
     "     About      ",
     "  BlastOS v0.1  ",
     "  by m0useCat   ",
@@ -708,6 +713,7 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     "   /BlastOS     ",
   },
   {
+    //6
     " Factory Reset  ",
     " This will wipe ",
     "  all settings  ",
@@ -769,7 +775,7 @@ struct ConfigUIMgr {
       case 4:  // edit profile page
         scrMgr.setText(numToText(currentProfileEdit + 1), 0, 14);
         scrMgr.setText(numToText(profileParams[currentProfileEdit].noidDPS), 2, 6);
-        scrMgr.setText(numToText(profileParams[currentProfileEdit].fracVelMultiplier), 3, 12);
+        scrMgr.setText(numToText(profileParams[currentProfileEdit].fracVelPercentage), 3, 12);
         scrMgr.setText(getModeText(profileParams[currentProfileEdit].firingMode), 4, 7);
         break;
       case 5:  // about
@@ -831,7 +837,11 @@ struct ConfigUIMgr {
   void setPage(uint8_t newPage) {
     //cursorIdx = getConfigMenuBounds(newPage)[0]; //might have to set this case by case or actually start doing proper data structs
     switch (newPage) {
-      case 0: cursorIdx = constrain(currentPage, getConfigMenuBounds(0)[0], getConfigMenuBounds(0)[1]); break;
+      case 0:
+        if (currentPage < 5) cursorIdx = constrain(currentPage, getConfigMenuBounds(0)[0], getConfigMenuBounds(0)[1]);
+        else if (currentPage == 5) cursorIdx = 4;
+        else if (currentPage == 6) cursorIdx = 5;
+        break;
       default: cursorIdx = getConfigMenuBounds(newPage)[0]; break;
     }
     currentPage = newPage;
@@ -892,9 +902,9 @@ struct ConfigUIMgr {
       case 4:  // edit profile
         switch (action) {
           case 1: setPage(3); return;
-          case 2: return;
-          case 3: return;
-          case 4: return;
+          case 2: setPropertyEdit(profileParams[currentProfileEdit].noidDPS); return;
+          case 3: setPropertyEdit(profileParams[currentProfileEdit].fracVelPercentage); return;
+          case 4: setPropertyEdit(profileParams[currentProfileEdit].firingMode); return;
         }
         return;
       case 5:  // about
@@ -906,7 +916,7 @@ struct ConfigUIMgr {
       case 6:  // factory reset
         switch (action) {
           case 7: setPage(0); return;
-          case 8: return;  // do the thing
+          case 8: factoryReset(); return;
         }
         return;
     }
@@ -953,7 +963,20 @@ struct ConfigUIMgr {
             }
         }
         break;
+      case 2:
+        break;
+      case 3:
+        break;
+      case 4:
+        break;
+      case 5:
+        break;
+      case 6:
+        break;
     }
+  }
+  void factoryReset() {
+    Serial.println("try factory reset");
   }
 };
 
@@ -1040,6 +1063,12 @@ void initCalcdDecayMultiplier() {
   globalState.calcdDecayMultiplier = float(globalParams.decayMultiplier) * 0.01f;
 }
 
+void initFracVelMultiplier() {
+  for (uint8_t i = 0; i < 2; i++) {
+    globalState.calcdFracVelMultiplier[i] = float(firingProfiles[i].fracVelPercentage) * 0.01f;
+  }
+}
+
 bool isSafetyLockout() {
   return staticParams.enableVoltageSafetyLockout && globalState.isUnsafeVoltage && !globalState.isBootConfigLockout;
 }
@@ -1103,7 +1132,8 @@ void assignPins() {
 }
 
 UseBootMode getBootModeIdx() {
-  /*if (getDigitalPin(PINMENU)) return UseBootMode::BOOTCONFIG;
+  /*if (globalParams.compLockProfile != 0) idfk
+  if (getDigitalPin(PINMENU)) return UseBootMode::BOOTCONFIG;
   if (getDigitalPin(PINSELECT1)) return UseBootMode::BOOTFRONT;
   if (getDigitalPin(PINSELECT2)) return UseBootMode::BOOTBACK;
   return UseBootMode::BOOTMID;*/
@@ -1165,7 +1195,7 @@ uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return in
   if (isSafetyLockout()) return false;
   if (revOrTrigIsActive) {
     globalState.currentRevSpeed =
-      isMenuPressed ? (((globalState.targetVelocity - WHEELMINSPEED) * getCurrentFiringProfile().fracVelMultiplier) + WHEELMINSPEED) : globalState.targetVelocity;
+      isMenuPressed ? (((globalState.targetVelocity - WHEELMINSPEED) * globalState.calcdFracVelMultiplier[globalState.currentFiringProfileIndex]/*getCurrentFiringProfile().fracVelMultiplier*/) + WHEELMINSPEED) : globalState.targetVelocity;
   } else {
     if (globalState.isStealthModeEnabled || !staticParams.enableDecay) globalState.currentRevSpeed = WHEELMINSPEED;
     else globalState.currentRevSpeed = ((globalState.currentRevSpeed - WHEELMINSPEED) * globalState.calcdDecayMultiplier) + WHEELMINSPEED;
@@ -1219,6 +1249,7 @@ bool shouldScreenUpdate(bool isProfileChanged, bool revOrTrigIsActive, bool isMe
 void initParams() {
   initMinMaxVoltage();
   initCalcdDecayMultiplier();
+  initFracVelMultiplier();
 }
 
 void bootStandardLoop() {
