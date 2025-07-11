@@ -849,7 +849,7 @@ struct ConfigUIMgr {
     }
     currentPage = newPage;
   }
-  void configMenuAction(uint8_t page, uint8_t action) {  // <-here
+  void configMenuAction(uint8_t page, uint8_t action) {
     switch (page) {
       case 0:
         if (action >= 1 && action <= 3) setPage(action);
@@ -972,13 +972,36 @@ struct ConfigUIMgr {
           }
           break;
         }
-      case 3:
+      case 3:  // modes - nothing here
         break;
-      case 4:
+      case 4:  // edit profile
+        //currentProfileEdit
+        uint8_t multiplier;
+        uint8_t min;
+        uint8_t max;
+        switch (cursorIdx) {
+          case 2: // dps
+          multiplier = 1;
+          min = 1;
+          max = globalParams.maxDPS;
+            break;
+          case 3: // fracvel %
+          multiplier = 5;
+          min = 10;
+          max = 90;
+            break;
+          case 4: // mode
+          multiplier = 1;
+          min = 0;
+          max = 9;
+            break;
+        }
+        uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
+        *useVal = simpleWrap(*useVal, dirMultiplier * multiplier, min, max);  //val, dir, min, max
         break;
-      case 5:
+      case 5:  // about - nothing here
         break;
-      case 6:
+      case 6:  // factory reset - nothing here
         break;
     }
   }
@@ -1144,11 +1167,11 @@ void assignPins() {
 }
 
 UseBootMode getBootModeIdx() {
-  if (getDigitalPin(PINMENU)) return UseBootMode::BOOTCONFIG;
+  /*if (getDigitalPin(PINMENU)) return UseBootMode::BOOTCONFIG;
   if (getDigitalPin(PINSELECT1)) return UseBootMode::BOOTFRONT;
   if (getDigitalPin(PINSELECT2)) return UseBootMode::BOOTBACK;
-  return UseBootMode::BOOTMID;
-  //return UseBootMode::BOOTCONFIG;
+  return UseBootMode::BOOTMID;*/
+  return UseBootMode::BOOTCONFIG;
 }
 
 void initESC() {
@@ -1328,16 +1351,9 @@ void bootConfigLoop() {
 }
 
 void save() {
-
 }
 
 void load() {
-  
-}
-
-void reboot() {
-  delay(500);
-  setupWrapped(false);
 }
 
 void setupWrapped(bool firstTime = true) {
@@ -1367,6 +1383,11 @@ void setupWrapped(bool firstTime = true) {
   Serial.println("Welcome to BlastOS");
   Serial.println(getBootModeLogString());
 #endif
+}
+
+void reboot() {
+  delay(500);
+  setupWrapped(false);
 }
 
 // 6. setup() and loop()
