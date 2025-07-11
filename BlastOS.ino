@@ -99,7 +99,7 @@ struct ProfileParams {
       firingMode(mode) {}
 };
 struct GlobalState {
-  uint16_t targetVelocity = 1200;
+  uint16_t targetVelocity = WHEELMINSPEED;
   unsigned long cycleStartTime = 0;
   bool isCycleActive = false;
   bool previousIsFiring = false;
@@ -755,7 +755,7 @@ struct ConfigUIMgr {
       scrMgr.setText(getConfigMenuText(currentPage, i), i, 0);
     }
   }
-  void drawConfigPageDetails(uint8_t page) {  // <-here
+  void drawConfigPageDetails(uint8_t page) {
     switch (page) {
       case 0: break;
       case 1:
@@ -779,10 +779,8 @@ struct ConfigUIMgr {
         scrMgr.setText(getModeText(profileParams[currentProfileEdit].firingMode), 4, 7);
         break;
       case 5:  // about
-        //scrMgr.setText();
         break;
       case 6:  // factory reset
-        //scrMgr.setText();
         break;
     }
   }
@@ -796,6 +794,11 @@ struct ConfigUIMgr {
         configMenuAction(currentPage, cursorIdx);  //perform menu item action
       } else {
         setPropertyEdit(nullptr);
+        if (currentPage == 2) {
+          globalState.targetVelocity = WHEELMINSPEED;
+          scrMgr.setText("                ", 7);
+          globalState.isBootConfigLockout = true;
+        }
       };
     }
     if (currentPropertyEdit) {
@@ -868,18 +871,15 @@ struct ConfigUIMgr {
       case 2:  // velocities
         switch (action) {
           case 1: setPage(0); return;
-          case 2:
-            currentBootVelEdit = 1;
-            setPropertyEdit(&bootVelocities[1]);
-            return;
-          case 3:
-            currentBootVelEdit = 0;
-            setPropertyEdit(&bootVelocities[0]);
-            return;
-          case 4:
-            currentBootVelEdit = 2;
-            setPropertyEdit(&bootVelocities[2]);
-            return;
+          case 2: currentBootVelEdit = 1; break;
+          case 3: currentBootVelEdit = 0; break;
+          case 4: currentBootVelEdit = 2; break;
+        }
+        if (action >= 2 && action <= 4) {
+          setPropertyEdit(&bootVelocities[currentBootVelEdit]);
+          globalState.targetVelocity = bootVelocities[currentBootVelEdit];
+          scrMgr.setText("Trigger Enabled ", 7);
+          globalState.isBootConfigLockout = false;
         }
         return;
       case 3:  // modes
@@ -929,7 +929,7 @@ struct ConfigUIMgr {
     int8_t dirMultiplier = direction ? 1 : -1;
     Serial.println("EDIT PROPERTY");
     switch (page) {
-      case 1:
+      case 1:  // global
         switch (cursorIdx) {
           case 2:
             {
@@ -963,8 +963,15 @@ struct ConfigUIMgr {
             }
         }
         break;
-      case 2:
-        break;
+      case 2:  // velocities
+        {
+          if (cursorIdx >= 2 && cursorIdx <= 4) {
+            uint16_t* useVal = static_cast<uint16_t*>(currentPropertyEdit);
+            *useVal = simpleWrap(*useVal, dirMultiplier * 25, WHEELMINSPEED, WHEELMAXSPEED);  //val, dir, min, max
+            globalState.targetVelocity = bootVelocities[currentBootVelEdit];
+          }
+          break;
+        }
       case 3:
         break;
       case 4:
@@ -1150,7 +1157,7 @@ void resetCycle() {
   globalState.cycleStartTime = millis();
 }
 
-bool getCyclingLogic() {
+bool getCyclingLogic(bool forceSemi = false) {
   if (isSafetyLockout()) return false;
   if (!debounceableTrigger.isDebounced()) return globalState.noidState;  // if not debounced, return previous value
   bool pusherOn = false;
@@ -1176,10 +1183,10 @@ bool getCyclingLogic() {
       globalState.isCycleActive = false;
       //resetBurstCounter();
       debounceableTrigger.resetDebounce();
-    } else if (isFullAuto()) {
+    } else if (isFullAuto() && !forceSemi) {
       pusherOn = true;  // reset the firing cycle
       resetCycle();
-    } else if (hasRemainingBursts()) {
+    } else if (hasRemainingBursts() && !forceSemi) {
       globalState.burstCounter--;  // not practical to try to gate this from loop() execution, so we accept the off by one issue and check again
       if (hasRemainingBursts()) {
         pusherOn = true;  // reset the firing cycle
@@ -1195,7 +1202,7 @@ uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return in
   if (isSafetyLockout()) return false;
   if (revOrTrigIsActive) {
     globalState.currentRevSpeed =
-      isMenuPressed ? (((globalState.targetVelocity - WHEELMINSPEED) * globalState.calcdFracVelMultiplier[globalState.currentFiringProfileIndex]/*getCurrentFiringProfile().fracVelMultiplier*/) + WHEELMINSPEED) : globalState.targetVelocity;
+      isMenuPressed ? (((globalState.targetVelocity - WHEELMINSPEED) * globalState.calcdFracVelMultiplier[globalState.currentFiringProfileIndex] /*getCurrentFiringProfile().fracVelMultiplier*/) + WHEELMINSPEED) : globalState.targetVelocity;
   } else {
     if (globalState.isStealthModeEnabled || !staticParams.enableDecay) globalState.currentRevSpeed = WHEELMINSPEED;
     else globalState.currentRevSpeed = ((globalState.currentRevSpeed - WHEELMINSPEED) * globalState.calcdDecayMultiplier) + WHEELMINSPEED;
@@ -1289,7 +1296,7 @@ void bootConfigLoop() {
         if (haptic.allowAction()) {
           uint8_t selection = getSelectorIndex();
           ConfigUI.updateConfig(selection);
-          haptic.start();
+          if (globalState.isBootConfigLockout) haptic.start();
         }
       }
     } else {
@@ -1302,6 +1309,18 @@ void bootConfigLoop() {
 #if DEBUGMODE
   setDigitalPin(LED_BUILTIN, haptic.getUpdatedStatus());
 #endif
+  if (!globalState.isBootConfigLockout) {
+    bool cyclingLogic = getCyclingLogic(true);
+    uint16_t revLogic = getRevLogic(false, isRevOrTrigActive());  // updates rev logic, the current motor speed.
+#if DEBUGMODE
+    Serial.println(revLogic);
+#endif
+    esc.writeMicroseconds(revLogic);
+    setDigitalPin(PINPUSHER, cyclingLogic);  // updates cycling logic, state of the pusher.
+#if DEBUGMODE
+    setDigitalPin(LED_BUILTIN, cyclingLogic);
+#endif
+  }
 }
 
 // 6. setup() and loop()
