@@ -16,9 +16,9 @@ Table of Contents (use ctrl-f):
 
 #include <Servo.h>  // PWM output to ESC's
 #include <nI2C.h>   // Screen
+//#include <type_traits>
 //#include <avr/pgmspace.h>
-//#include <EEPROM.h> // Save/load profiles
-
+#include <EEPROM.h> // Save/load profiles
 /*
 todo:
 implement config UI
@@ -89,7 +89,7 @@ struct ProfileParams {
   uint8_t firingMode;  // 0: safe, 1: semi, 2-254: burst, 255: auto
   //bool leftyMode = false;
   ProfileParams(
-    uint8_t DPS = 12,
+    uint8_t DPS = 20,
     uint8_t fvMultiplier = 50,
     uint8_t mode = 3  //,
     //bool left = false
@@ -604,7 +604,7 @@ struct StatusUIMgr {
   void updateStatus(bool updateScr = true) {
     uint8_t mode = getCurrentFiringProfile().firingMode;
     scrMgr.setText(getModeText(mode), 4, 6);
-    if (mode > 1 && mode < 255) scrMgr.setText(numToText(mode, 1), 4, 11);
+    //if (mode > 1 && mode < 255) scrMgr.setText(numToText(mode, 1), 4, 11);
     scrMgr.setText(getDPSText(), 5, 6);
     scrMgr.setSprite(101, 7, 5);
     uint16_t voltage = map(analogRead(PINVOLTAGE), 0, 1023, 0, HWMAXVOLTAGE);
@@ -653,7 +653,7 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     " Velocities     ",
     " Modes          ",
     " About          ",
-    " Save & Restart ",
+    " Save           ",
     "Slider & Menu to",
     "Nav & Select    ",
   },
@@ -736,6 +736,30 @@ const uint8_t* getConfigMenuBounds(uint8_t page) {
   return configMenuBounds[page];
 }
 
+uint8_t simpleWrap(uint8_t val, int8_t direction, uint8_t rangeMin, uint8_t rangeMax, bool allowMaxWrap = false) {
+  if (val == UINT8_MAX) return direction > 0 ? rangeMin : rangeMax;
+  if (direction > 0) {
+    if (val >= rangeMax) return allowMaxWrap ? UINT8_MAX : rangeMin;
+    else return constrain(val + direction, rangeMin, rangeMax);
+  } else if (direction < 0) {
+    if (val <= rangeMin) return allowMaxWrap ? UINT8_MAX : rangeMax;
+    else return constrain(val + direction, rangeMin, rangeMax);
+  }
+  return val;
+}
+
+uint16_t simpleWrap(uint16_t val, int8_t direction, uint16_t rangeMin, uint16_t rangeMax, bool allowMaxWrap = false) {
+  if (val == UINT16_MAX) return direction ? rangeMin : rangeMax;
+  if (direction > 0) {
+    if (val >= rangeMax) return allowMaxWrap ? UINT16_MAX : rangeMin;
+    else return constrain(val + direction, rangeMin, rangeMax);
+  } else if (direction < 0) {
+    if (val <= rangeMin) return allowMaxWrap ? UINT16_MAX : rangeMax;
+    else return constrain(val + direction, rangeMin, rangeMax);
+  }
+  return val;
+}
+
 struct ConfigUIMgr {
   ScreenMgr& scrMgr;
   GlobalParams& globalParams;
@@ -774,7 +798,7 @@ struct ConfigUIMgr {
         break;
       case 4:  // edit profile page
         scrMgr.setText(numToText(currentProfileEdit + 1), 0, 14);
-        scrMgr.setText(numToText(profileParams[currentProfileEdit].noidDPS), 2, 6);
+        scrMgr.setText(numToText(profileParams[currentProfileEdit].noidDPS, 2), 2, 6);
         scrMgr.setText(numToText(profileParams[currentProfileEdit].fracVelPercentage), 3, 12);
         scrMgr.setText(getModeText(profileParams[currentProfileEdit].firingMode), 4, 7);
         break;
@@ -845,6 +869,10 @@ struct ConfigUIMgr {
         else if (currentPage == 5) cursorIdx = 4;
         else if (currentPage == 6) cursorIdx = 5;
         break;
+      case 3:
+        if (currentPage == 4) cursorIdx = constrain(currentProfileEdit + 2, getConfigMenuBounds(3)[0], getConfigMenuBounds(3)[1]);
+        else cursorIdx = getConfigMenuBounds(3)[0];
+        break;
       default: cursorIdx = getConfigMenuBounds(newPage)[0]; break;
     }
     currentPage = newPage;
@@ -855,7 +883,7 @@ struct ConfigUIMgr {
         if (action >= 1 && action <= 3) setPage(action);
         switch (action) {
           case 4: setPage(5); return;
-          case 5: reboot(); return;
+          case 5: save(); /*reboot();*/ return;
         }
         return;
       case 1:  // global
@@ -902,9 +930,9 @@ struct ConfigUIMgr {
       case 4:  // edit profile
         switch (action) {
           case 1: setPage(3); return;
-          case 2: setPropertyEdit(profileParams[currentProfileEdit].noidDPS); return;
-          case 3: setPropertyEdit(profileParams[currentProfileEdit].fracVelPercentage); return;
-          case 4: setPropertyEdit(profileParams[currentProfileEdit].firingMode); return;
+          case 2: setPropertyEdit(&profileParams[currentProfileEdit].noidDPS); return;
+          case 3: setPropertyEdit(&profileParams[currentProfileEdit].fracVelPercentage); return;
+          case 4: setPropertyEdit(&profileParams[currentProfileEdit].firingMode); return;
         }
         return;
       case 5:  // about
@@ -967,7 +995,7 @@ struct ConfigUIMgr {
         {
           if (cursorIdx >= 2 && cursorIdx <= 4) {
             uint16_t* useVal = static_cast<uint16_t*>(currentPropertyEdit);
-            *useVal = simpleWrap(*useVal, dirMultiplier * 25, WHEELMINSPEED, WHEELMAXSPEED);  //val, dir, min, max
+            *useVal = simpleWrap /*16*/ (*useVal, dirMultiplier * 25, WHEELMINSPEED, WHEELMAXSPEED);  //val, dir, min, max
             globalState.targetVelocity = bootVelocities[currentBootVelEdit];
           }
           break;
@@ -979,25 +1007,27 @@ struct ConfigUIMgr {
         uint8_t multiplier;
         uint8_t min;
         uint8_t max;
+        bool allowMaxWrap = false;
         switch (cursorIdx) {
-          case 2: // dps
-          multiplier = 1;
-          min = 1;
-          max = globalParams.maxDPS;
+          case 2:  // dps
+            multiplier = 1;
+            min = 1;
+            max = globalParams.maxDPS;
             break;
-          case 3: // fracvel %
-          multiplier = 5;
-          min = 10;
-          max = 90;
+          case 3:  // fracvel %
+            multiplier = 5;
+            min = 10;
+            max = 90;
             break;
-          case 4: // mode
-          multiplier = 1;
-          min = 0;
-          max = 9;
+          case 4:  // mode
+            multiplier = 1;
+            min = 0;
+            max = 9;
+            allowMaxWrap = true;
             break;
         }
         uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
-        *useVal = simpleWrap(*useVal, dirMultiplier * multiplier, min, max);  //val, dir, min, max
+        *useVal = simpleWrap(*useVal, dirMultiplier * multiplier, min, max, allowMaxWrap);  //val, dir, min, max
         break;
       case 5:  // about - nothing here
         break;
@@ -1018,9 +1048,9 @@ Servo esc;
 StaticParams staticParams;
 GlobalParams globalParams;
 ProfileParams firingProfiles[] = {  // dps, fvMulti, mode i.e. 0: safe, 1: semi, 2-254: burst, 255: auto
-  { ProfileParams(globalParams.maxDPS, 0.5f, 3) },
-  { ProfileParams(globalParams.maxDPS, 0.5f, 1) },
-  { ProfileParams(globalParams.maxDPS, 0.5f, 255) }
+  { ProfileParams(globalParams.maxDPS, 50, 3) },
+  { ProfileParams(globalParams.maxDPS, 50, 1) },
+  { ProfileParams(globalParams.maxDPS, 50, 255) }
 };
 uint16_t bootVelocities[] = { 1600, 1450, 2000 };
 GlobalState globalState;
@@ -1051,7 +1081,10 @@ char* getModeText(uint8_t mode) {
     case 0: return "Safe  ";
     case 1: return "Semi  ";
     case 255: return "Auto  ";
-    default: return "Burst";
+    default:
+      static char text[7];  // "Burst" + up to 1 digit + '\0'
+      snprintf(text, sizeof text, "Burst%u", mode);
+      return text;
   }
 }
 
@@ -1109,28 +1142,6 @@ bool isSafetyLockout() {
 }
 
 // 4. Other Helpers
-
-uint8_t simpleWrap(uint8_t val, int8_t direction, uint8_t min, uint8_t max) {
-  if (direction > 0) {
-    if (val >= max) return min;
-    else return constrain(val + direction, min, max);
-  } else if (direction < 0) {
-    if (val <= min) return max;
-    else return constrain(val + direction, min, max);
-  }
-  return val;
-}
-
-uint16_t simpleWrap(uint16_t val, int8_t direction, uint16_t min, uint16_t max) {
-  if (direction > 0) {
-    if (val >= max) return min;
-    else return constrain(val + direction, min, max);
-  } else if (direction < 0) {
-    if (val <= min) return max;
-    else return constrain(val + direction, min, max);
-  }
-  return val;
-}
 
 bool getDigitalPin(uint8_t pin) {
   return digitalRead(pin) == LOW;
@@ -1360,6 +1371,7 @@ void setupWrapped(bool firstTime = true) {
   if (firstTime) {
     scrMgr.initDisplay();
     assignPins();
+    load();
   }
 
   initParams();
