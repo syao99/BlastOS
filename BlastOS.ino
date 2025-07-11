@@ -40,7 +40,6 @@ implement config UI
 #define WHEELMINSPEED 1000
 #define WHEELMAXSPEED 2000
 #define HWMAXVOLTAGE 1680
-#define ENABLEDECAY true
 
 #define SCREEN_ADDR 0x3C
 #define ROW_LAST 7
@@ -70,14 +69,19 @@ struct Debounceable {
     return (millis() - debounceStartTime) >= debounceTime;
   }
 };
+struct StaticParams {  // not exposed to config yet
+  uint16_t minPerCell = 360;
+  uint16_t maxPerCell = 420;
+  bool enableDecay = true;
+  bool enableVoltageSafetyLockout = false;
+};
 struct GlobalParams {
   uint8_t maxDPS = 20;
   uint8_t noidOnTime = 25;
   uint8_t compLockProfile = 0;  // 0 disabled, 1/2/3 for corresponding profiles
-  uint16_t minPerCell = 360;    // do not expose to config yet
-  uint16_t maxPerCell = 420;    // do not expose to config yet
+
   uint8_t cellCount = 4;
-  bool enableVoltageSafetyLockout = false;
+
   uint8_t decayMultiplier = 99;
   GlobalParams() {}
 };
@@ -114,6 +118,7 @@ struct GlobalState {
   uint16_t minVoltage;
   uint16_t maxVoltage;
   bool isUnsafeVoltage = true;
+  bool isBootConfigLockout = false;
   float calcdDecayMultiplier;
 };
 struct Haptic {
@@ -505,19 +510,21 @@ struct ScreenMgr {
   }
 };
 
-char* numToTextPrepend(uint16_t num, char prepend = '_') {
-  // Allow space for up to 5 digits + 1 prepend char + null terminator
-  static char buf[7];
-  uint8_t pos = sizeof(buf) - 1;
-  buf[pos] = '\0';
-  // Fill in digits from the end
+char* numToTextPrependAppend(uint16_t num,
+                             char prepend = '_',
+                             char append = ' ') {
+  static char buf[8];
+  uint8_t pos = sizeof(buf);
+  buf[--pos] = '\0';    // terminate
+  buf[--pos] = append;  // set append char
+
+  // fill digits from right to left
   do {
     buf[--pos] = '0' + (num % 10);
     num /= 10;
   } while (num);
-  // Prepend the specified character
-  buf[--pos] = prepend;
-  // Return pointer to the start of the result
+
+  buf[--pos] = prepend;  // set prepend char
   return &buf[pos];
 }
 char* numToText(uint16_t num) {
@@ -580,9 +587,9 @@ char* voltageToText(uint16_t voltage,
 struct StatusUIMgr {
   ScreenMgr& scrMgr;
   GlobalParams& globalParams;
-  ProfileParams& profileParams;
+  ProfileParams* profileParams;
   GlobalState& globalState;
-  StatusUIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState)
+  StatusUIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams* pParams, GlobalState& gState)
     : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) {}
   void initStatus(bool updateScr = true) {
     scrMgr.setText(versionText, 0, 2);
@@ -658,7 +665,7 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     " CellCount: ?   ",
     " Coasting: ??%  ",  //  < 0%, 80-99.5%
     " Comp Lock: ??? ",  // < Off, P1, P2, P3
-    "P?: ????        ",  //"RevOffTimeS: ???", // < max 1s",
+    "                ",  // P?: ???? // "RevOffTimeS: ???", // < max 1s",
   },
   {
     "   Velocities   ",
@@ -694,11 +701,11 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     "     About      ",
     "  BlastOS v0.1  ",
     "  by m0useCat   ",
-    "                ",
     " Go Back        ",
-    "                ",
-    "                ",
     " Factory Reset  ",
+    "   github.com   ",
+    "   /syao99      ",
+    "   /BlastOS     ",
   },
   {
     " Factory Reset  ",
@@ -717,7 +724,7 @@ char* getConfigMenuText(uint8_t page, uint8_t row) {
   return buf;
 }
 const uint8_t configMenuBounds[CONFIG_PAGE_COUNT][2] = {
-  { 1, 5 }, { 1, 6 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 1, 1 }
+  { 1, 5 }, { 1, 6 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 3, 4 }, { 7, 8 }
 };
 const uint8_t* getConfigMenuBounds(uint8_t page) {
   return configMenuBounds[page];
@@ -726,7 +733,7 @@ const uint8_t* getConfigMenuBounds(uint8_t page) {
 struct ConfigUIMgr {
   ScreenMgr& scrMgr;
   GlobalParams& globalParams;
-  ProfileParams& profileParams;
+  ProfileParams* profileParams;
   GlobalState& globalState;
   const uint16_t* bootVelocities;
   uint8_t currentPage = 0;
@@ -734,14 +741,15 @@ struct ConfigUIMgr {
   //editableProperty currentPropertyEdit = editableProperty::NONE;
   void* currentPropertyEdit = nullptr;
   uint8_t currentProfileEdit = 255;
-  ConfigUIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams& pParams, GlobalState& gState, uint16_t* bVel)
+  uint8_t currentBootVelEdit = 255;
+  ConfigUIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams* pParams, GlobalState& gState, uint16_t* bVel)
     : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState), bootVelocities(bVel) {}
   void drawConfigPageBase(uint8_t page) {
     for (uint8_t i = 0; i < ROW_COUNT; ++i) {
       scrMgr.setText(getConfigMenuText(currentPage, i), i, 0);
     }
   }
-  void drawConfigPageDetails(uint8_t page) {
+  void drawConfigPageDetails(uint8_t page) {  // <-here
     switch (page) {
       case 0: break;
       case 1:
@@ -756,16 +764,18 @@ struct ConfigUIMgr {
         scrMgr.setText(numToText(bootVelocities[0]), 3, 9);
         scrMgr.setText(numToText(bootVelocities[2]), 4, 9);
         break;
-      case 3:
+      case 3:  // profile selection page, nothing to do here since their names are hardcoded.
+        break;
+      case 4:  // edit profile page
+        scrMgr.setText(numToText(currentProfileEdit + 1), 0, 14);
+        scrMgr.setText(numToText(profileParams[currentProfileEdit].noidDPS), 2, 6);
+        scrMgr.setText(numToText(profileParams[currentProfileEdit].fracVelMultiplier), 3, 12);
+        scrMgr.setText(getModeText(profileParams[currentProfileEdit].firingMode), 4, 7);
+        break;
+      case 5:  // about
         //scrMgr.setText();
         break;
-      case 4:
-        //scrMgr.setText();
-        break;
-      case 5:
-        //scrMgr.setText();
-        break;
-      case 6:
+      case 6:  // factory reset
         //scrMgr.setText();
         break;
     }
@@ -826,49 +836,77 @@ struct ConfigUIMgr {
     }
     currentPage = newPage;
   }
-  void configMenuAction(uint8_t page, uint8_t action) { // <-here
+  void configMenuAction(uint8_t page, uint8_t action) {  // <-here
     switch (page) {
       case 0:
-        setPage(action);
+        if (action >= 1 && action <= 3) setPage(action);
+        switch (action) {
+          case 4: setPage(5); return;
+          case 5: return;
+        }
         return;
-      case 1:
+      case 1:  // global
         switch (action) {
           case 1: setPage(0); return;
           case 2: setPropertyEdit(&globalParams.maxDPS); return;
-          case 3: return;
-          case 4: return;
+          case 3: setPropertyEdit(&globalParams.noidOnTime); return;
+          case 4: setPropertyEdit(&globalParams.cellCount); return;
+          case 5: setPropertyEdit(&globalParams.decayMultiplier); return;
+          case 6: setPropertyEdit(&globalParams.compLockProfile); return;
         }
         return;
-      case 2:
+      case 2:  // velocities
         switch (action) {
           case 1: setPage(0); return;
+          case 2:
+            currentBootVelEdit = 1;
+            setPropertyEdit(&bootVelocities[1]);
+            return;
+          case 3:
+            currentBootVelEdit = 0;
+            setPropertyEdit(&bootVelocities[0]);
+            return;
+          case 4:
+            currentBootVelEdit = 2;
+            setPropertyEdit(&bootVelocities[2]);
+            return;
+        }
+        return;
+      case 3:  // modes
+        switch (action) {
+          case 1: setPage(0); return;
+          case 2:
+            currentProfileEdit = 0;
+            setPage(4);
+            return;
+          case 3:
+            currentProfileEdit = 1;
+            setPage(4);
+            return;
+          case 4:
+            currentProfileEdit = 2;
+            setPage(4);
+            return;
+        }
+        return;
+      case 4:  // edit profile
+        switch (action) {
+          case 1: setPage(3); return;
           case 2: return;
           case 3: return;
           case 4: return;
         }
         return;
-      case 3:
+      case 5:  // about
         switch (action) {
-          case 1: setPage(0); return;
-          case 2: return;
-          case 3: return;
-          case 4: return;
+          case 3: setPage(0); return;
+          case 4: setPage(6); return;
         }
         return;
-      case 4:
+      case 6:  // factory reset
         switch (action) {
-          case 1: setPage(0); return;
-          case 2: return;
-          case 3: return;
-          case 4: return;
-        }
-        return;
-      case 5:
-        switch (action) {
-          case 1: setPage(0); return;
-          case 2: return;
-          case 3: return;
-          case 4: return;
+          case 7: setPage(0); return;
+          case 8: return;  // do the thing
         }
         return;
     }
@@ -884,11 +922,35 @@ struct ConfigUIMgr {
       case 1:
         switch (cursorIdx) {
           case 2:
-            uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
-            *useVal = simpleWrap(*useVal, dirMultiplier, 1, 30); //val, dir, min, max
-            Serial.println(numToText(*useVal));
-            Serial.println(numToText(globalParams.maxDPS));
-            break;
+            {
+              uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
+              *useVal = simpleWrap(*useVal, dirMultiplier, 1, 50);  //val, dir, min, max
+              break;
+            }
+          case 3:
+            {
+              uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
+              *useVal = simpleWrap(*useVal, dirMultiplier, 1, 50);  //val, dir, min, max
+              break;
+            }
+          case 4:
+            {
+              uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
+              *useVal = simpleWrap(*useVal, dirMultiplier, 1, 4);  //val, dir, min, max
+              break;
+            }
+          case 5:
+            {
+              uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
+              *useVal = simpleWrap(*useVal, dirMultiplier, 80, 99);  //val, dir, min, max
+              break;
+            }
+          case 6:
+            {
+              uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
+              *useVal = simpleWrap(*useVal, dirMultiplier, 0, 3);  //val, dir, min, max
+              break;
+            }
         }
         break;
     }
@@ -900,6 +962,7 @@ Servo esc;
 
 // Global, Profile, and State
 
+StaticParams staticParams;
 GlobalParams globalParams;
 ProfileParams firingProfiles[] = {  // dps, fvMulti, mode i.e. 0: safe, 1: semi, 2-254: burst, 255: auto
   { ProfileParams(globalParams.maxDPS, 0.5f, 3) },
@@ -949,7 +1012,7 @@ char* getCompLockProfileText(uint8_t profile) {
     case 0: return "Off";
     default:
       {
-        return numToTextPrepend(profile, 'P');
+        return numToTextPrependAppend(profile, 'P');
       }
   }
 }
@@ -969,8 +1032,8 @@ void updateNoidOffTime() {
 }
 
 void initMinMaxVoltage() {
-  globalState.minVoltage = globalParams.minPerCell * globalParams.cellCount;
-  globalState.maxVoltage = globalParams.maxPerCell * globalParams.cellCount;
+  globalState.minVoltage = staticParams.minPerCell * globalParams.cellCount;
+  globalState.maxVoltage = staticParams.maxPerCell * globalParams.cellCount;
 }
 
 void initCalcdDecayMultiplier() {
@@ -978,7 +1041,7 @@ void initCalcdDecayMultiplier() {
 }
 
 bool isSafetyLockout() {
-  return globalParams.enableVoltageSafetyLockout && globalState.isUnsafeVoltage;
+  return staticParams.enableVoltageSafetyLockout && globalState.isUnsafeVoltage && !globalState.isBootConfigLockout;
 }
 
 // 4. Other Helpers
@@ -1104,7 +1167,7 @@ uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return in
     globalState.currentRevSpeed =
       isMenuPressed ? (((globalState.targetVelocity - WHEELMINSPEED) * getCurrentFiringProfile().fracVelMultiplier) + WHEELMINSPEED) : globalState.targetVelocity;
   } else {
-    if (globalState.isStealthModeEnabled || !ENABLEDECAY) globalState.currentRevSpeed = WHEELMINSPEED;
+    if (globalState.isStealthModeEnabled || !staticParams.enableDecay) globalState.currentRevSpeed = WHEELMINSPEED;
     else globalState.currentRevSpeed = ((globalState.currentRevSpeed - WHEELMINSPEED) * globalState.calcdDecayMultiplier) + WHEELMINSPEED;
   }
   return globalState.currentRevSpeed;
@@ -1225,6 +1288,7 @@ void setup() {
     StatusUI.initStatus();
     StatusUI.updateStatus();
   } else {
+    globalState.isBootConfigLockout = true;
     ConfigUI.updateConfig();
   }
 #if DEBUGMODE
