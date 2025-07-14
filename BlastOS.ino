@@ -18,7 +18,7 @@ Table of Contents (use ctrl-f):
 #include <nI2C.h>   // Screen
 //#include <type_traits>
 //#include <avr/pgmspace.h>
-#include <EEPROM.h> // Save/load profiles
+#include <EEPROM.h>  // Save/load profiles
 /*
 todo:
 implement config UI
@@ -77,7 +77,7 @@ struct StaticParams {  // not exposed to config yet
 };
 struct GlobalParams {
   uint8_t maxDPS = 20;
-  uint8_t noidOnTime = 25;
+  uint8_t noidOnTime = 35;
   uint8_t compLockProfile = 0;  // 0 disabled, 1/2/3 for corresponding profiles
   uint8_t cellCount = 4;
   uint8_t decayMultiplier = 99;
@@ -106,7 +106,7 @@ struct GlobalState {
   uint8_t burstCounter = 0;
   bool noidState = false;
   uint16_t currentRevSpeed = WHEELMINSPEED;
-  uint16_t noidOffTime = 30;
+  uint16_t noidOffTime;
   uint8_t currentFiringProfileIndex = 0;
   uint8_t previousFiringProfileIndex = 0;
   UseBootMode useMode;
@@ -715,10 +715,10 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
   {
     //6
     " Factory Reset  ",
-    " This will wipe ",
-    "  all settings  ",
-    "  and can't be  ",
-    "    undone.     ",
+    "This will take a",
+    "moment, wipe all",
+    "user settings, &",
+    "can't be undone.",
     "   Continue?    ",
     " No             ",
     " Yes            ",
@@ -730,7 +730,7 @@ char* getConfigMenuText(uint8_t page, uint8_t row) {
   return buf;
 }
 const uint8_t configMenuBounds[CONFIG_PAGE_COUNT][2] = {
-  { 1, 5 }, { 1, 6 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 3, 4 }, { 7, 8 }
+  { 1, 5 }, { 1, 6 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 3, 4 }, { 6, 7 }
 };
 const uint8_t* getConfigMenuBounds(uint8_t page) {
   return configMenuBounds[page];
@@ -768,7 +768,6 @@ struct ConfigUIMgr {
   const uint16_t* bootVelocities;
   uint8_t currentPage = 0;
   uint8_t cursorIdx = 1;
-  //editableProperty currentPropertyEdit = editableProperty::NONE;
   void* currentPropertyEdit = nullptr;
   uint8_t currentProfileEdit = 255;
   uint8_t currentBootVelEdit = 255;
@@ -861,34 +860,28 @@ struct ConfigUIMgr {
     else if (direction == 1) return simpleWrap(cursorIdx, -1, bounds[0], bounds[1]);
     else return 255;
   }
-  void setPage(uint8_t newPage) {
-    //cursorIdx = getConfigMenuBounds(newPage)[0]; //might have to set this case by case or actually start doing proper data structs
-    switch (newPage) {
-      case 0:
-        if (currentPage < 5) cursorIdx = constrain(currentPage, getConfigMenuBounds(0)[0], getConfigMenuBounds(0)[1]);
-        else if (currentPage == 5) cursorIdx = 4;
-        else if (currentPage == 6) cursorIdx = 5;
-        break;
-      case 3:
-        if (currentPage == 4) cursorIdx = constrain(currentProfileEdit + 2, getConfigMenuBounds(3)[0], getConfigMenuBounds(3)[1]);
-        else cursorIdx = getConfigMenuBounds(3)[0];
-        break;
-      default: cursorIdx = getConfigMenuBounds(newPage)[0]; break;
-    }
+  void setPage(uint8_t newPage, uint8_t newCursorIdx = 255) {
+    if (newCursorIdx != 255) cursorIdx = constrain(newCursorIdx, getConfigMenuBounds(newPage)[0], getConfigMenuBounds(newPage)[1]);
+    else cursorIdx = getConfigMenuBounds(newPage)[0];
     currentPage = newPage;
   }
   void configMenuAction(uint8_t page, uint8_t action) {
     switch (page) {
       case 0:
         if (action >= 1 && action <= 3) setPage(action);
+        if (action == 2) updateConfigFiringProfile();
         switch (action) {
           case 4: setPage(5); return;
-          case 5: save(); /*reboot();*/ return;
+          case 5:
+            save();
+            //reboot();
+            //cursorIdx = getConfigMenuBounds(0)[0];
+            return;
         }
         return;
       case 1:  // global
         switch (action) {
-          case 1: setPage(0); return;
+          case 1: setPage(0, 1); return;
           case 2: setPropertyEdit(&globalParams.maxDPS); return;
           case 3: setPropertyEdit(&globalParams.noidOnTime); return;
           case 4: setPropertyEdit(&globalParams.cellCount); return;
@@ -898,21 +891,23 @@ struct ConfigUIMgr {
         return;
       case 2:  // velocities
         switch (action) {
-          case 1: setPage(0); return;
+          case 1: setPage(0, 2); return;
           case 2: currentBootVelEdit = 1; break;
           case 3: currentBootVelEdit = 0; break;
           case 4: currentBootVelEdit = 2; break;
         }
         if (action >= 2 && action <= 4) {
+          updateConfigFiringProfile();
           setPropertyEdit(&bootVelocities[currentBootVelEdit]);
           globalState.targetVelocity = bootVelocities[currentBootVelEdit];
           scrMgr.setText("Trigger Enabled ", 7);
+          updateNoidOffTime();
           globalState.isBootConfigLockout = false;
         }
         return;
       case 3:  // modes
         switch (action) {
-          case 1: setPage(0); return;
+          case 1: setPage(0, 3); return;
           case 2:
             currentProfileEdit = 0;
             setPage(4);
@@ -929,7 +924,7 @@ struct ConfigUIMgr {
         return;
       case 4:  // edit profile
         switch (action) {
-          case 1: setPage(3); return;
+          case 1: setPage(3, currentProfileEdit + 2); return;
           case 2: setPropertyEdit(&profileParams[currentProfileEdit].noidDPS); return;
           case 3: setPropertyEdit(&profileParams[currentProfileEdit].fracVelPercentage); return;
           case 4: setPropertyEdit(&profileParams[currentProfileEdit].firingMode); return;
@@ -937,14 +932,17 @@ struct ConfigUIMgr {
         return;
       case 5:  // about
         switch (action) {
-          case 3: setPage(0); return;
+          case 3: setPage(0, 4); return;
           case 4: setPage(6); return;
         }
         return;
       case 6:  // factory reset
         switch (action) {
-          case 7: setPage(0); return;
-          case 8: factoryReset(); return;
+          case 6: setPage(0, 4); return;
+          case 7:
+            setPage(0);
+            factoryReset();
+            return;
         }
         return;
     }
@@ -1036,7 +1034,11 @@ struct ConfigUIMgr {
     }
   }
   void factoryReset() {
-    Serial.println("try factory reset");
+    Serial.println("factory reset");
+    for (int i = 0; i < EEPROM.length(); i++) {
+      EEPROM.put(i, 255);
+    }
+    resetUserParamsToDefault();
   }
 };
 
@@ -1046,13 +1048,27 @@ Servo esc;
 // Global, Profile, and State
 
 StaticParams staticParams;
-GlobalParams globalParams;
-ProfileParams firingProfiles[] = {  // dps, fvMulti, mode i.e. 0: safe, 1: semi, 2-254: burst, 255: auto
-  { ProfileParams(globalParams.maxDPS, 50, 3) },
-  { ProfileParams(globalParams.maxDPS, 50, 1) },
-  { ProfileParams(globalParams.maxDPS, 50, 255) }
+
+const GlobalParams defaultGlobalParams;
+const ProfileParams defaultFiringProfiles[] = {
+  // dps, fvMulti, mode i.e. 0: safe, 1: semi, 2-254: burst, 255: auto
+  { ProfileParams(defaultGlobalParams.maxDPS, 50, 3) },
+  { ProfileParams(defaultGlobalParams.maxDPS, 50, 1) },
+  { ProfileParams(defaultGlobalParams.maxDPS, 50, 255) },
 };
-uint16_t bootVelocities[] = { 1600, 1450, 2000 };
+const uint16_t defaultBootVelocities[] = { 1600, 1450, 2000 };
+
+GlobalParams globalParams;
+ProfileParams firingProfiles[3] = defaultFiringProfiles;
+uint16_t bootVelocities[3] = { 1600, 1450, 2000 };
+
+ProfileParams configFiringProfile = ProfileParams(globalParams.maxDPS, 50, 1);
+
+void updateConfigFiringProfile() {
+  configFiringProfile.noidDPS = globalParams.maxDPS;
+
+}
+
 GlobalState globalState;
 Debounceable debounceableTrigger;
 Debounceable debounceableMenu;
@@ -1096,8 +1112,8 @@ char* getDPSText() {
 char* getCompLockProfileText(uint8_t profile) {
   switch (profile) {
     case 0: return "Off";
-    case 1: return "Low";
-    case 2: return "Mid";
+    case 1: return "Mid";
+    case 2: return "Low";
     case 3: return "Hi ";
     default:
       {
@@ -1106,8 +1122,16 @@ char* getCompLockProfileText(uint8_t profile) {
   }
 }
 
-ProfileParams getCurrentFiringProfile() {
+ProfileParams getCurrentFiringProfile() {  //<-here
+  if (globalState.useMode == UseBootMode::BOOTCONFIG) return configFiringProfile;
   return firingProfiles[globalState.currentFiringProfileIndex];
+}
+
+void resetUserParamsToDefault() {
+  globalParams = defaultGlobalParams;
+  memcpy(firingProfiles, defaultFiringProfiles, sizeof(firingProfiles));
+  memcpy(bootVelocities, defaultBootVelocities, sizeof(bootVelocities));
+  Serial.println("reset user params to default");
 }
 
 void initBootVelocity() {
@@ -1178,11 +1202,11 @@ void assignPins() {
 }
 
 UseBootMode getBootModeIdx() {
-  /*if (getDigitalPin(PINMENU)) return UseBootMode::BOOTCONFIG;
+  if (getDigitalPin(PINMENU)) return UseBootMode::BOOTCONFIG;
   if (getDigitalPin(PINSELECT1)) return UseBootMode::BOOTFRONT;
   if (getDigitalPin(PINSELECT2)) return UseBootMode::BOOTBACK;
-  return UseBootMode::BOOTMID;*/
-  return UseBootMode::BOOTCONFIG;
+  return UseBootMode::BOOTMID;
+  //return UseBootMode::BOOTCONFIG;
 }
 
 void initESC() {
@@ -1195,8 +1219,8 @@ void resetCycle() {
   globalState.cycleStartTime = millis();
 }
 
-bool getCyclingLogic(bool forceSemi = false) {
-  if (isSafetyLockout()) return false;
+bool getCyclingLogic() {
+  if (isSafetyLockout() || isSafeMode()) return false;
   if (!debounceableTrigger.isDebounced()) return globalState.noidState;  // if not debounced, return previous value
   bool pusherOn = false;
   bool isTriggerPulled = getDigitalPin(PINTRIG);
@@ -1219,12 +1243,11 @@ bool getCyclingLogic(bool forceSemi = false) {
       }
     } else if (!isTriggerPulled) {  // trigger released, end the cycle asap but allow it to finish to avoid jams.
       globalState.isCycleActive = false;
-      //resetBurstCounter();
       debounceableTrigger.resetDebounce();
-    } else if (isFullAuto() && !forceSemi) {
+    } else if (isFullAuto()) {
       pusherOn = true;  // reset the firing cycle
       resetCycle();
-    } else if (hasRemainingBursts() && !forceSemi) {
+    } else if (hasRemainingBursts()) {
       globalState.burstCounter--;  // not practical to try to gate this from loop() execution, so we accept the off by one issue and check again
       if (hasRemainingBursts()) {
         pusherOn = true;  // reset the firing cycle
@@ -1237,7 +1260,7 @@ bool getCyclingLogic(bool forceSemi = false) {
 }
 
 uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return int with the rev speed.
-  if (isSafetyLockout()) return false;
+  if (isSafetyLockout() || isSafeMode()) return WHEELMINSPEED;
   if (revOrTrigIsActive) {
     globalState.currentRevSpeed =
       isMenuPressed ? (((globalState.targetVelocity - WHEELMINSPEED) * globalState.calcdFracVelMultiplier[globalState.currentFiringProfileIndex] /*getCurrentFiringProfile().fracVelMultiplier*/) + WHEELMINSPEED) : globalState.targetVelocity;
@@ -1249,6 +1272,10 @@ uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return in
 }
 bool isRevOrTrigActive() {
   return getDigitalPin(PINREV) || getDigitalPin(PINTRIG);
+}
+
+bool isSafeMode() {
+  return getCurrentFiringProfile().firingMode == 0;
 }
 
 bool isFullAuto() {
@@ -1291,7 +1318,8 @@ bool shouldScreenUpdate(bool isProfileChanged, bool revOrTrigIsActive, bool isMe
   return execInterval();
 }
 
-void initParams() {
+void initAllParams() {
+  updateConfigFiringProfile();
   initMinMaxVoltage();
   initCalcdDecayMultiplier();
   initFracVelMultiplier();
@@ -1306,7 +1334,10 @@ void bootStandardLoop() {
   bool isProfileChanged = globalState.currentFiringProfileIndex != globalState.previousFiringProfileIndex;
   bool cyclingLogic = getCyclingLogic();
   globalState.isStealthModeEnabled = !revOrTrigIsActive && isMenuPressed;
-  if (isProfileChanged) resetBurstCounter();
+  if (isProfileChanged) {
+    resetBurstCounter();
+    updateNoidOffTime();
+  }
   uint16_t revLogic = getRevLogic(isMenuPressed, revOrTrigIsActive);  // updates rev logic, the current motor speed.
 #if DEBUGMODE
   Serial.println(revLogic);
@@ -1325,10 +1356,10 @@ void bootStandardLoop() {
 
 void bootConfigLoop() {
   //scrMgr.loopInvertAll();
-  static bool previousIsMenuPressed;
+  static bool previousIsMenuPressed = getDigitalPin(PINMENU);
   bool isMenuPressed = getDigitalPin(PINMENU);
   if (isMenuPressed != previousIsMenuPressed) {
-    uint8_t selectorIdx = getSelectorIndex();
+    //uint8_t selectorIdx = getSelectorIndex();
     if (isMenuPressed) {
       if (debounceableMenu.isDebounced()) {
         if (haptic.allowAction()) {
@@ -1345,10 +1376,10 @@ void bootConfigLoop() {
   previousIsMenuPressed = isMenuPressed;
   setDigitalPin(PINPUSHER, haptic.getUpdatedStatus());
 #if DEBUGMODE
-  setDigitalPin(LED_BUILTIN, haptic.getUpdatedStatus());
+  //setDigitalPin(LED_BUILTIN, haptic.getUpdatedStatus());
 #endif
   if (!globalState.isBootConfigLockout) {
-    bool cyclingLogic = getCyclingLogic(true);
+    bool cyclingLogic = getCyclingLogic();
     uint16_t revLogic = getRevLogic(false, isRevOrTrigActive());  // updates rev logic, the current motor speed.
 #if DEBUGMODE
     Serial.println(revLogic);
@@ -1358,47 +1389,123 @@ void bootConfigLoop() {
 #if DEBUGMODE
     setDigitalPin(LED_BUILTIN, cyclingLogic);
 #endif
-  } else esc.writeMicroseconds(WHEELMINSPEED);
+  } else {
+#if DEBUGMODE
+    Serial.println(WHEELMINSPEED);
+#endif
+    esc.writeMicroseconds(WHEELMINSPEED);
+  }
 }
 
-void save() {
-}
+static constexpr int EEPROM_BASE_ADDR = 0;
+static constexpr uint16_t EEPROM_MAGIC = 0xA5A5;
+
+// compute total sizes
+static constexpr size_t SIZE_GLOBAL = sizeof(globalParams);
+static constexpr size_t SIZE_PROFILES = sizeof(firingProfiles);
+static constexpr size_t SIZE_VELOCITIES = sizeof(bootVelocities);
 
 void load() {
+  int addr = EEPROM_BASE_ADDR;
+  uint16_t magic;
+  EEPROM.get(addr, magic);
+  if (magic != EEPROM_MAGIC) {
+    // first‐boot or version mismatch: leave defaults or init here
+    return;
+  }
+  addr += sizeof(magic);
+
+  EEPROM.get(addr, globalParams);
+  addr += SIZE_GLOBAL;
+
+  EEPROM.get(addr, firingProfiles);
+  addr += SIZE_PROFILES;
+
+  EEPROM.get(addr, bootVelocities);
+  addr += SIZE_VELOCITIES;
+
+  // optional: verify addr ≤ EEPROM.length()
+}
+/*
+static int updateBlock(int addr, const void* data, size_t len) {
+  auto p = (const uint8_t*)data;
+  for (size_t i = 0; i < len; ++i) {
+    addr = EEPROM.update(addr, p[i]);
+  }
+  return addr;
+}
+*/
+void save() {
+  int addr = EEPROM_BASE_ADDR;
+
+  EEPROM.put(addr, EEPROM_MAGIC);
+  addr += sizeof(EEPROM_MAGIC);
+
+  EEPROM.put(addr, globalParams);
+  addr += SIZE_GLOBAL;
+
+  EEPROM.put(addr, firingProfiles);
+  addr += SIZE_PROFILES;
+
+  EEPROM.put(addr, bootVelocities);
+  addr += SIZE_VELOCITIES;
+}
+
+void dumpEEPROMHex() {
+  for (int addr = 0; addr < EEPROM.length(); ++addr) {
+    uint8_t b = EEPROM.read(addr);
+    Serial.print(addr);
+    Serial.print(":0x");
+    if (b < 0x10) Serial.print('0');
+    Serial.println(b, HEX);
+  }
+}
+
+void dumpEEPROMDec() {
+  for (int addr = 0; addr < EEPROM.length(); ++addr) {
+    uint8_t b = EEPROM.read(addr);
+    Serial.print(addr);
+    Serial.print(": ");
+    Serial.println(b, DEC);  // print value in decimal (0–255)
+  }
 }
 
 void setupWrapped(bool firstTime = true) {
   if (firstTime) {
     scrMgr.initDisplay();
     assignPins();
-    load();
   }
+  else {
+    scrMgr.screenClear();
+  }
+  load();
 
-  initParams();
+  initAllParams();
   globalState.useMode = getBootModeIdx();  // WIP boot mode implementation
-  updateNoidOffTime();
   updateFiringProfileIndex();
   if (globalState.useMode != UseBootMode::BOOTCONFIG) {
     initBootVelocity();
+    updateNoidOffTime();
+    globalState.isBootConfigLockout = false;
     StatusUI.initStatus();
     StatusUI.updateStatus();
-    globalState.isBootConfigLockout = false;
   } else {
     globalState.isBootConfigLockout = true;
+    updateNoidOffTime();
     ConfigUI.updateConfig();
   }
-
-  initESC();
 
 #if DEBUGMODE
   Serial.begin(9600);
   Serial.println("Welcome to BlastOS");
   Serial.println(getBootModeLogString());
 #endif
+  initESC();
 }
 
 void reboot() {
-  delay(500);
+  delay(2000);
+  resetUserParamsToDefault();
   setupWrapped(false);
 }
 
