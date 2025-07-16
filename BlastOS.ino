@@ -23,7 +23,7 @@ Table of Contents (use ctrl-f):
 todo:
 implement config UI
 */
-#define DEBUGMODE true
+#define DEBUGMODE false
 // 1. Pinout
 // Input
 #define PINREV 11
@@ -80,7 +80,7 @@ struct GlobalParams {
   uint8_t noidOnTime = 35;
   uint8_t compLockProfile = 0;  // 0 disabled, 1/2/3 for corresponding profiles
   uint8_t cellCount = 4;
-  uint8_t decayMultiplier = 99;
+  uint16_t decayMultiplier = 995;
   GlobalParams() {}
 };
 struct ProfileParams {
@@ -472,7 +472,7 @@ struct ScreenMgr {
     }
   }
   void cycleSprites(bool update = true) {
-    Serial.println("test cyclespr");
+    //Serial.println("test cyclespr");
     uint8_t idx = 0;
     for (uint8_t row = 0; row < ROW_COUNT; ++row) {
       for (uint8_t col = 0; col < COL_COUNT; ++col) {
@@ -953,7 +953,7 @@ struct ConfigUIMgr {
   void editCurrentProperty(bool direction, uint8_t page, uint8_t cursorIdx) {  // <-here
     //currentPropertyEdit
     int8_t dirMultiplier = direction ? 1 : -1;
-    Serial.println("EDIT PROPERTY");
+    //Serial.println("EDIT PROPERTY");
     switch (page) {
       case 1:  // global
         switch (cursorIdx) {
@@ -978,7 +978,7 @@ struct ConfigUIMgr {
           case 5:
             {
               uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
-              *useVal = simpleWrap(*useVal, dirMultiplier, 80, 99);  //val, dir, min, max
+              *useVal = simpleWrap(*useVal, dirMultiplier*1, 800, 999);  //val, dir, min, max
               break;
             }
           case 6:
@@ -1066,7 +1066,6 @@ ProfileParams configFiringProfile = ProfileParams(globalParams.maxDPS, 50, 1);
 
 void updateConfigFiringProfile() {
   configFiringProfile.noidDPS = globalParams.maxDPS;
-
 }
 
 GlobalState globalState;
@@ -1131,7 +1130,7 @@ void resetUserParamsToDefault() {
   globalParams = defaultGlobalParams;
   memcpy(firingProfiles, defaultFiringProfiles, sizeof(firingProfiles));
   memcpy(bootVelocities, defaultBootVelocities, sizeof(bootVelocities));
-  Serial.println("reset user params to default");
+  //Serial.println("reset user params to default");
 }
 
 void initBootVelocity() {
@@ -1152,7 +1151,7 @@ void initMinMaxVoltage() {
 }
 
 void initCalcdDecayMultiplier() {
-  globalState.calcdDecayMultiplier = float(globalParams.decayMultiplier) * 0.01f;
+  globalState.calcdDecayMultiplier = float(globalParams.decayMultiplier) * 0.001f;
 }
 
 void initFracVelMultiplier() {
@@ -1177,7 +1176,7 @@ void setDigitalPin(uint8_t pin, bool isActive) {
 
 // 5. Core Methods
 
-void printTileMap() {
+void serialPrintTileMap() {
   for (uint8_t page = 0; page < 8; ++page) {
     for (uint8_t col = 0; col < 16; ++col) {
       char* showVal = numToText(scrMgr.getTileMapAt(page, col), 3);
@@ -1260,6 +1259,8 @@ bool getCyclingLogic() {
 }
 
 uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return int with the rev speed.
+  static unsignedLong lastReleaseTime = 0;
+  static bool previousRevOrTrigIsActive = false;
   if (isSafetyLockout() || isSafeMode()) return WHEELMINSPEED;
   if (revOrTrigIsActive) {
     globalState.currentRevSpeed =
@@ -1268,6 +1269,8 @@ uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return in
     if (globalState.isStealthModeEnabled || !staticParams.enableDecay) globalState.currentRevSpeed = WHEELMINSPEED;
     else globalState.currentRevSpeed = ((globalState.currentRevSpeed - WHEELMINSPEED) * globalState.calcdDecayMultiplier) + WHEELMINSPEED;
   }
+  if (previousRevOrTrigIsActive != revOrTrigIsActive)
+  previousRevOrTrigIsActive = revOrTrigIsActive;
   return globalState.currentRevSpeed;
 }
 bool isRevOrTrigActive() {
@@ -1332,21 +1335,17 @@ void bootStandardLoop() {
   bool isMenuPressed = getDigitalPin(PINMENU);
   bool revOrTrigIsActive = isRevOrTrigActive();
   bool isProfileChanged = globalState.currentFiringProfileIndex != globalState.previousFiringProfileIndex;
-  bool cyclingLogic = getCyclingLogic();
   globalState.isStealthModeEnabled = !revOrTrigIsActive && isMenuPressed;
   if (isProfileChanged) {
     resetBurstCounter();
     updateNoidOffTime();
   }
   uint16_t revLogic = getRevLogic(isMenuPressed, revOrTrigIsActive);  // updates rev logic, the current motor speed.
-#if DEBUGMODE
-  Serial.println(revLogic);
-#endif
+  bool cyclingLogic = getCyclingLogic();
   esc.writeMicroseconds(revLogic);
   setDigitalPin(PINPUSHER, cyclingLogic);  // updates cycling logic, state of the pusher.
-#if DEBUGMODE
+  Serial.println(revLogic);
   setDigitalPin(LED_BUILTIN, cyclingLogic);
-#endif
   if (globalState.isStealthModeEnabled != previousIsStealthModeEnabled && globalState.isStealthModeEnabled) scrMgr.screenClear();
   if (!globalState.isStealthModeEnabled && shouldScreenUpdate(isProfileChanged, revOrTrigIsActive, isMenuPressed)) StatusUI.updateStatus();
   globalState.previousFiringProfileIndex = globalState.currentFiringProfileIndex;
@@ -1373,28 +1372,19 @@ void bootConfigLoop() {
       if (haptic.isDone()) haptic.reset();
     }
   }
-  previousIsMenuPressed = isMenuPressed;
-  setDigitalPin(PINPUSHER, haptic.getUpdatedStatus());
-#if DEBUGMODE
-  //setDigitalPin(LED_BUILTIN, haptic.getUpdatedStatus());
-#endif
   if (!globalState.isBootConfigLockout) {
     bool cyclingLogic = getCyclingLogic();
     uint16_t revLogic = getRevLogic(false, isRevOrTrigActive());  // updates rev logic, the current motor speed.
-#if DEBUGMODE
-    Serial.println(revLogic);
-#endif
     esc.writeMicroseconds(revLogic);
     setDigitalPin(PINPUSHER, cyclingLogic);  // updates cycling logic, state of the pusher.
-#if DEBUGMODE
+    Serial.println(revLogic);
     setDigitalPin(LED_BUILTIN, cyclingLogic);
-#endif
   } else {
-#if DEBUGMODE
-    Serial.println(WHEELMINSPEED);
-#endif
     esc.writeMicroseconds(WHEELMINSPEED);
+    setDigitalPin(PINPUSHER, haptic.getUpdatedStatus());
+    Serial.println(WHEELMINSPEED);
   }
+  previousIsMenuPressed = isMenuPressed;
 }
 
 static constexpr int EEPROM_BASE_ADDR = 0;
@@ -1451,7 +1441,7 @@ void save() {
   addr += SIZE_VELOCITIES;
 }
 
-void dumpEEPROMHex() {
+void serialPrintDumpEEPROMHex() {
   for (int addr = 0; addr < EEPROM.length(); ++addr) {
     uint8_t b = EEPROM.read(addr);
     Serial.print(addr);
@@ -1461,7 +1451,7 @@ void dumpEEPROMHex() {
   }
 }
 
-void dumpEEPROMDec() {
+void serialPrintDumpEEPROMDec() {
   for (int addr = 0; addr < EEPROM.length(); ++addr) {
     uint8_t b = EEPROM.read(addr);
     Serial.print(addr);
@@ -1474,8 +1464,7 @@ void setupWrapped(bool firstTime = true) {
   if (firstTime) {
     scrMgr.initDisplay();
     assignPins();
-  }
-  else {
+  } else {
     scrMgr.screenClear();
   }
   load();
