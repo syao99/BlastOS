@@ -595,31 +595,32 @@ struct StatusUIMgr {
   GlobalState& globalState;
   StatusUIMgr(ScreenMgr& mgr, GlobalParams& gParams, ProfileParams* pParams, GlobalState& gState)
     : scrMgr(mgr), globalParams(gParams), profileParams(pParams), globalState(gState) {}
-  void initStatus(bool updateScr = true) {
+  void initStatus(bool updateScr = false) {
     scrMgr.setText(versionText, 0, 2);
-    scrMgr.setText(globalState.bootModeText, 1, 3);
-    scrMgr.setSprite(102, 3, 5);
-    scrMgr.setText(numToText(globalState.targetVelocity), 3, 6);
-    scrMgr.setSprite(106, 4, 5);
-    scrMgr.setSprite(103, 5, 5);
-    scrMgr.setText("DPS", 5, 8);
+    scrMgr.setText(globalState.bootModeText, 1, 0);
+    scrMgr.setSprite(102, 1, 11);
+    scrMgr.setText(numToText(globalState.targetVelocity), 1, 12);
+    scrMgr.setSprite(106, 3, 0);
+    scrMgr.setSprite(103, 3, 10);
+    scrMgr.setText("DPS", 3, 13);
     scrMgr.setText("v", 7, 11);
     if (updateScr) scrMgr.updateScreen();
   }
   void updateStatus(bool updateScr = true) {
     uint8_t mode = getCurrentFiringProfile().firingMode;
-    scrMgr.setText(getModeText(mode), 4, 6);
-    //if (mode > 1 && mode < 255) scrMgr.setText(numToText(mode, 1), 4, 11);
-    scrMgr.setText(getDPSText(), 5, 6);
+    scrMgr.setText(getModeText(mode), 3, 1);
+    scrMgr.setText(getDPSText(), 3, 11);
+    scrMgr.setText("S MAX", 5, 6);
+    scrMgr.setText(numToText(globalParams.cellCount, 1), 5, 5);
     scrMgr.setSprite(101, 7, 5);
     uint16_t voltage = map(analogRead(PINVOLTAGE), 0, 1023, 0, HWMAXVOLTAGE);
     scrMgr.setText(voltageToText(voltage), 7, 6);
     if (voltage < globalState.minVoltage) {
       globalState.isUnsafeVoltage = true;
-      scrMgr.setText("!LOW BATT! ", 6, 3);
+      scrMgr.setText("!!LOW BATTERY!!", 6, 0);
     } else if (voltage > globalState.maxVoltage) {
       globalState.isUnsafeVoltage = true;
-      scrMgr.setText("!HIGH BATT!", 6, 3);
+      scrMgr.setText("!!HIGH BATTERY!!", 6, 0);
     } else {
       globalState.isUnsafeVoltage = false;
       scrMgr.setText("                ", 6, 0);
@@ -709,13 +710,13 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
   {
     //5
     "     About      ",
-    "  BlastOS v0.1  ",
+    "BlastOS Firmware",
     "  by m0useCat   ",
-    " Go Back        ",
-    " Factory Reset  ",
     "   github.com   ",
     "   /syao99      ",
     "   /BlastOS     ",
+    " Go Back        ",
+    " Factory Reset  ",
   },
   {
     //6
@@ -746,12 +747,11 @@ char* getConfigMenuText(uint8_t page, uint8_t row) {
   return buf;
 }
 const uint8_t configMenuBounds[CONFIG_PAGE_COUNT][2] = {
-  { 1, 5 }, { 1, 7 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 3, 4 }, { 6, 7 }
+  { 1, 5 }, { 1, 7 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 6, 7 }, { 6, 7 }
 };
 const uint8_t* getConfigMenuBounds(uint8_t page) {
   return configMenuBounds[page];
 }
-
 uint8_t simpleWrap(uint8_t val, int8_t direction, uint8_t rangeMin, uint8_t rangeMax, bool allowMaxWrap = false) {
   if (val == UINT8_MAX) return direction > 0 ? rangeMin : rangeMax;
   if (direction > 0) {
@@ -763,7 +763,6 @@ uint8_t simpleWrap(uint8_t val, int8_t direction, uint8_t rangeMin, uint8_t rang
   }
   return val;
 }
-
 uint16_t simpleWrap(uint16_t val, int8_t direction, uint16_t rangeMin, uint16_t rangeMax, bool allowMaxWrap = false) {
   if (val == UINT16_MAX) return direction > 0 ? rangeMin : rangeMax;
   if (direction > 0) {
@@ -955,8 +954,8 @@ struct ConfigUIMgr {
         return;
       case 5:  // about
         switch (action) {
-          case 3: setPage(0, 4); return;
-          case 4: setPage(6); return;
+          case 6: setPage(0, 4); return;
+          case 7: setPage(6); return;
         }
         return;
       case 6:  // factory reset
@@ -1004,7 +1003,7 @@ struct ConfigUIMgr {
             }
           case 5:
             {
-              uint16_t* useVal = static_cast<uint16_t*>(currentPropertyEdit);  //decayConstant
+              uint16_t* useVal = static_cast<uint16_t*>(currentPropertyEdit);      //decayConstant
               *useVal = simpleWrap(*useVal, dirMultiplier * 25, 200, 1000, true);  //val, dir, min, max;
               break;
             }
