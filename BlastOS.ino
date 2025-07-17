@@ -23,7 +23,7 @@ Table of Contents (use ctrl-f):
 todo:
 implement config UI
 */
-#define DEBUGMODE true
+#define DEBUGMODE false
 // 1. Pinout
 // Input
 #define PINREV 11
@@ -81,7 +81,7 @@ struct GlobalParams {
   uint8_t compLockProfile = 0;  // 0 disabled, 1/2/3 for corresponding profiles
   uint8_t cellCount = 4;
   uint16_t decayConstant = 600;
-  uint16_t delayBeforeEndRev = 250;
+  uint16_t delayBeforeEndRev = 100;
   GlobalParams() {}
 };
 struct ProfileParams {
@@ -1187,7 +1187,7 @@ void initCalcdParam(uint16_t param, float multiplier) {
 }
 void initCalcdDecayConstant() {
   globalState.calcdDecayConstant = float(globalParams.decayConstant) * 0.001f;
-  globalState.enableDecay = (globalParams.decayConstant == UINT16_MAX);
+  globalState.enableDecay = (globalParams.decayConstant != UINT16_MAX);
 }
 void initFracVelMultiplier() {
   for (uint8_t i = 0; i < 3; i++) {
@@ -1414,7 +1414,7 @@ void bootStandardLoop() {
   esc.writeMicroseconds(revLogic);
   setDigitalPin(PINPUSHER, cyclingLogic);  // updates cycling logic, state of the pusher.
 #if DEBUGMODE
-  Serial.println(revLogic);
+  Serial.println(revLogic);//revLogic
   setDigitalPin(LED_BUILTIN, cyclingLogic);
 #endif
   if (globalState.isStealthModeEnabled != previousIsStealthModeEnabled && globalState.isStealthModeEnabled) scrMgr.screenClear();
