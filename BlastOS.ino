@@ -23,7 +23,7 @@ Table of Contents (use ctrl-f):
 todo:
 implement config UI
 */
-#define DEBUGMODE false
+#define DEBUGMODE true
 // 1. Pinout
 // Input
 #define PINREV 11
@@ -46,6 +46,7 @@ implement config UI
 #define COL_LAST 15
 #define ROW_COUNT 8
 #define COL_COUNT 16
+#define REF_TIME_MS -10000
 
 //#define EEPROMOFFSET 24  // max 1000, add 24 if EEPROM issues occur. 24 may actually need to be a different value depending on save config data
 const char* versionText = "BlastOS v0.1";
@@ -80,7 +81,8 @@ struct GlobalParams {
   uint8_t noidOnTime = 35;
   uint8_t compLockProfile = 0;  // 0 disabled, 1/2/3 for corresponding profiles
   uint8_t cellCount = 4;
-  uint16_t decayMultiplier = 995;
+  uint16_t decayConstant = 600;
+  uint16_t delayBeforeEndRev = 250;
   GlobalParams() {}
 };
 struct ProfileParams {
@@ -105,7 +107,6 @@ struct GlobalState {
   bool previousIsFiring = false;
   uint8_t burstCounter = 0;
   bool noidState = false;
-  uint16_t currentRevSpeed = WHEELMINSPEED;
   uint16_t noidOffTime;
   uint8_t currentFiringProfileIndex = 0;
   uint8_t previousFiringProfileIndex = 0;
@@ -117,8 +118,8 @@ struct GlobalState {
   uint16_t maxVoltage;
   bool isUnsafeVoltage = true;
   bool isBootConfigLockout = false;
-  float calcdDecayMultiplier;
   float calcdFracVelMultiplier[3];
+  float calcdDecayConstant;
 };
 struct Haptic {
   unsigned long startTime = 0;
@@ -644,7 +645,7 @@ static const MenuItemP menuItems[] PROGMEM = {
   // …
 };*/
 
-#define CONFIG_PAGE_COUNT 7
+#define CONFIG_PAGE_COUNT 8
 static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] PROGMEM = {
   {
     //0
@@ -664,9 +665,9 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     " Max DPS: ??    ",
     " Noid Time: ??ms",
     " CellCount: ?   ",
-    " Coasting: ??%  ",  //  < 0%, 80-99.5%
-    " Comp Lock: ??? ",  // < Off, P1, P2, P3
-    "                ",  // P?: ???? // "RevOffTimeS: ???", // < max 1s",
+    " Coasting: ???  ",  //  < 0%, 80-99.5% or now, simple integer typically between 3-4 digits, higher for faster decay
+    " AfterRev:    MS",  //
+    " Comp Lock: ??? ",  // P?: ???? // "RevOffTimeS: ???", // < max 1s",
   },
   {
     //2
@@ -722,7 +723,18 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     "   Continue?    ",
     " No             ",
     " Yes            ",
-  }
+  },
+  {
+    //7
+    "                ",
+    "                ",
+    "  Resetting...  ",
+    "  Please Wait   ",
+    "                ",
+    "                ",
+    "                ",
+    "                ",
+  },
 };
 char* getConfigMenuText(uint8_t page, uint8_t row) {
   static char buf[COL_COUNT + 1];
@@ -730,7 +742,7 @@ char* getConfigMenuText(uint8_t page, uint8_t row) {
   return buf;
 }
 const uint8_t configMenuBounds[CONFIG_PAGE_COUNT][2] = {
-  { 1, 5 }, { 1, 6 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 3, 4 }, { 6, 7 }
+  { 1, 5 }, { 1, 7 }, { 1, 4 }, { 1, 4 }, { 1, 4 }, { 3, 4 }, { 6, 7 }
 };
 const uint8_t* getConfigMenuBounds(uint8_t page) {
   return configMenuBounds[page];
@@ -782,11 +794,12 @@ struct ConfigUIMgr {
     switch (page) {
       case 0: break;
       case 1:
-        scrMgr.setText(numToText(globalParams.maxDPS), 2, 10);
-        scrMgr.setText(numToText(globalParams.noidOnTime), 3, 12);
-        scrMgr.setText(numToText(globalParams.cellCount), 4, 12);
-        scrMgr.setText(numToText(globalParams.decayMultiplier), 5, 11);
-        scrMgr.setText(getCompLockProfileText(globalParams.compLockProfile), 6, 12);
+        scrMgr.setText(numToText(globalParams.maxDPS, 2), 2, 10);
+        scrMgr.setText(numToText(globalParams.noidOnTime, 2), 3, 12);
+        scrMgr.setText(numToText(globalParams.cellCount, 1), 4, 12);
+        scrMgr.setText(numToText(globalParams.decayConstant, 3), 5, 11);
+        scrMgr.setText(numToText(globalParams.delayBeforeEndRev, 3), 6, 11);
+        scrMgr.setText(getCompLockProfileText(globalParams.compLockProfile), 7, 12);
         break;
       case 2:
         scrMgr.setText(numToText(bootVelocities[1]), 2, 9);
@@ -873,7 +886,12 @@ struct ConfigUIMgr {
         switch (action) {
           case 4: setPage(5); return;
           case 5:
+            scrMgr.invertSpan(cursorIdx);
+            updateScreen();
             save();
+            delay(500);
+            scrMgr.invertSpan(cursorIdx);
+            updateScreen();
             //reboot();
             //cursorIdx = getConfigMenuBounds(0)[0];
             return;
@@ -885,8 +903,9 @@ struct ConfigUIMgr {
           case 2: setPropertyEdit(&globalParams.maxDPS); return;
           case 3: setPropertyEdit(&globalParams.noidOnTime); return;
           case 4: setPropertyEdit(&globalParams.cellCount); return;
-          case 5: setPropertyEdit(&globalParams.decayMultiplier); return;
-          case 6: setPropertyEdit(&globalParams.compLockProfile); return;
+          case 5: setPropertyEdit(&globalParams.decayConstant); return;
+          case 6: setPropertyEdit(&globalParams.delayBeforeEndRev); return;
+          case 7: setPropertyEdit(&globalParams.compLockProfile); return;
         }
         return;
       case 2:  // velocities
@@ -940,8 +959,12 @@ struct ConfigUIMgr {
         switch (action) {
           case 6: setPage(0, 4); return;
           case 7:
-            setPage(0);
+            scrMgr.invertSpan(cursorIdx);
+            updateScreen();
+            delay(500);
             factoryReset();
+            setPage(0);
+            updateScreen();
             return;
         }
         return;
@@ -977,11 +1000,17 @@ struct ConfigUIMgr {
             }
           case 5:
             {
-              uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
-              *useVal = simpleWrap(*useVal, dirMultiplier*1, 800, 999);  //val, dir, min, max
+              uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);  //decayConstant
+              *useVal = simpleWrap(*useVal, dirMultiplier * 10, 200, 1000);  //val, dir, min, max
               break;
             }
           case 6:
+            {
+              uint16_t* useVal = static_cast<uint16_t*>(currentPropertyEdit);
+              *useVal = simpleWrap(*useVal, dirMultiplier * 25, 0, 500);  //val, dir, min, max
+              break;
+            }
+          case 7:
             {
               uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);
               *useVal = simpleWrap(*useVal, dirMultiplier, 0, 3);  //val, dir, min, max
@@ -1150,12 +1179,14 @@ void initMinMaxVoltage() {
   globalState.maxVoltage = staticParams.maxPerCell * globalParams.cellCount;
 }
 
-void initCalcdDecayMultiplier() {
-  globalState.calcdDecayMultiplier = float(globalParams.decayMultiplier) * 0.001f;
+void initCalcdParam(uint16_t param, float multiplier) {
+  return float(param) * multiplier;
 }
-
+void initCalcdDecayConstant() {
+  globalState.calcdDecayConstant = float(globalParams.decayConstant) * 0.001f;
+}
 void initFracVelMultiplier() {
-  for (uint8_t i = 0; i < 2; i++) {
+  for (uint8_t i = 0; i < 3; i++) {
     globalState.calcdFracVelMultiplier[i] = float(firingProfiles[i].fracVelPercentage) * 0.01f;
   }
 }
@@ -1258,20 +1289,51 @@ bool getCyclingLogic() {
   return pusherOn;
 }
 
-uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return int with the rev speed.
-  static unsignedLong lastReleaseTime = 0;
+uint16_t getHandledRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // adds a delay to end of rev
+  //return getRevLogic(isMenuPressed, revOrTrigIsActive);
+  static unsigned long lastReleaseTime = REF_TIME_MS;
   static bool previousRevOrTrigIsActive = false;
+  uint16_t useRevLogic = WHEELMINSPEED;
+  if (!revOrTrigIsActive) {
+    if (previousRevOrTrigIsActive != revOrTrigIsActive) {
+      lastReleaseTime = millis();
+      useRevLogic = getRevLogic(isMenuPressed, true);
+    }
+    if (millis() - lastReleaseTime < globalParams.delayBeforeEndRev) useRevLogic = getRevLogic(isMenuPressed, true);
+    else useRevLogic = getRevLogic(isMenuPressed, false);
+  } else useRevLogic = getRevLogic(isMenuPressed, true);
+  previousRevOrTrigIsActive = revOrTrigIsActive;
+  return useRevLogic;
+}
+uint16_t getFracVelTargetSpeed() {
+  return (((globalState.targetVelocity - WHEELMINSPEED) * globalState.calcdFracVelMultiplier[globalState.currentFiringProfileIndex]) + WHEELMINSPEED);
+}
+uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return int with the rev speed.
+  static unsigned long lastReleaseTime = REF_TIME_MS;
+  static bool previousRevOrTrigIsActive = false;
+  static uint16_t currentTargetSpeed = WHEELMINSPEED;
+  float currentRevSpeed = WHEELMINSPEED;
   if (isSafetyLockout() || isSafeMode()) return WHEELMINSPEED;
   if (revOrTrigIsActive) {
-    globalState.currentRevSpeed =
-      isMenuPressed ? (((globalState.targetVelocity - WHEELMINSPEED) * globalState.calcdFracVelMultiplier[globalState.currentFiringProfileIndex] /*getCurrentFiringProfile().fracVelMultiplier*/) + WHEELMINSPEED) : globalState.targetVelocity;
+    if (isMenuPressed) currentTargetSpeed = getFracVelTargetSpeed();
+    else currentTargetSpeed = globalState.targetVelocity;
+    currentRevSpeed = currentTargetSpeed;
   } else {
-    if (globalState.isStealthModeEnabled || !staticParams.enableDecay) globalState.currentRevSpeed = WHEELMINSPEED;
-    else globalState.currentRevSpeed = ((globalState.currentRevSpeed - WHEELMINSPEED) * globalState.calcdDecayMultiplier) + WHEELMINSPEED;
+    if (globalState.isStealthModeEnabled || !staticParams.enableDecay) {
+      lastReleaseTime = REF_TIME_MS;
+      currentRevSpeed = WHEELMINSPEED;
+    } else {
+      if (previousRevOrTrigIsActive != revOrTrigIsActive && !revOrTrigIsActive) lastReleaseTime = millis();
+      float t = (millis() - (lastReleaseTime)) / 1000.f;
+      currentRevSpeed = ((currentTargetSpeed - WHEELMINSPEED) * expf(-globalState.calcdDecayConstant * t)) + WHEELMINSPEED;
+      if (currentRevSpeed < WHEELMINSPEED + 50) currentRevSpeed = WHEELMINSPEED;
+    }
   }
-  if (previousRevOrTrigIsActive != revOrTrigIsActive)
   previousRevOrTrigIsActive = revOrTrigIsActive;
-  return globalState.currentRevSpeed;
+  //Serial.print("current target speed: ");
+  //Serial.print(currentTargetSpeed);
+  //Serial.println();
+  return (uint16_t)(currentRevSpeed + 0.5f);
 }
 bool isRevOrTrigActive() {
   return getDigitalPin(PINREV) || getDigitalPin(PINTRIG);
@@ -1324,7 +1386,7 @@ bool shouldScreenUpdate(bool isProfileChanged, bool revOrTrigIsActive, bool isMe
 void initAllParams() {
   updateConfigFiringProfile();
   initMinMaxVoltage();
-  initCalcdDecayMultiplier();
+  initCalcdDecayConstant();
   initFracVelMultiplier();
 }
 
@@ -1332,20 +1394,25 @@ void bootStandardLoop() {
   updateFiringProfileIndex();  // update current profile index based on slide switch posiioning.
   static bool previousIsMenuPressed;
   static bool previousIsStealthModeEnabled;
+  static bool stealthLockout = false;
   bool isMenuPressed = getDigitalPin(PINMENU);
   bool revOrTrigIsActive = isRevOrTrigActive();
   bool isProfileChanged = globalState.currentFiringProfileIndex != globalState.previousFiringProfileIndex;
-  globalState.isStealthModeEnabled = !revOrTrigIsActive && isMenuPressed;
+  if (revOrTrigIsActive) stealthLockout = true;
+  if (!revOrTrigIsActive && !isMenuPressed) stealthLockout = false;
+  globalState.isStealthModeEnabled = !stealthLockout && !revOrTrigIsActive && isMenuPressed;
   if (isProfileChanged) {
     resetBurstCounter();
     updateNoidOffTime();
   }
-  uint16_t revLogic = getRevLogic(isMenuPressed, revOrTrigIsActive);  // updates rev logic, the current motor speed.
+  uint16_t revLogic = getHandledRevLogic(isMenuPressed, revOrTrigIsActive);  // updates rev logic, the current motor speed.
   bool cyclingLogic = getCyclingLogic();
   esc.writeMicroseconds(revLogic);
   setDigitalPin(PINPUSHER, cyclingLogic);  // updates cycling logic, state of the pusher.
+#if DEBUGMODE
   Serial.println(revLogic);
   setDigitalPin(LED_BUILTIN, cyclingLogic);
+#endif
   if (globalState.isStealthModeEnabled != previousIsStealthModeEnabled && globalState.isStealthModeEnabled) scrMgr.screenClear();
   if (!globalState.isStealthModeEnabled && shouldScreenUpdate(isProfileChanged, revOrTrigIsActive, isMenuPressed)) StatusUI.updateStatus();
   globalState.previousFiringProfileIndex = globalState.currentFiringProfileIndex;
@@ -1374,15 +1441,19 @@ void bootConfigLoop() {
   }
   if (!globalState.isBootConfigLockout) {
     bool cyclingLogic = getCyclingLogic();
-    uint16_t revLogic = getRevLogic(false, isRevOrTrigActive());  // updates rev logic, the current motor speed.
+    uint16_t revLogic = getHandledRevLogic(false, isRevOrTrigActive());  // updates rev logic, the current motor speed.
     esc.writeMicroseconds(revLogic);
     setDigitalPin(PINPUSHER, cyclingLogic);  // updates cycling logic, state of the pusher.
+#if DEBUGMODE
     Serial.println(revLogic);
     setDigitalPin(LED_BUILTIN, cyclingLogic);
+#endif
   } else {
     esc.writeMicroseconds(WHEELMINSPEED);
     setDigitalPin(PINPUSHER, haptic.getUpdatedStatus());
+#if DEBUGMODE
     Serial.println(WHEELMINSPEED);
+#endif
   }
   previousIsMenuPressed = isMenuPressed;
 }
