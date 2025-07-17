@@ -887,11 +887,11 @@ struct ConfigUIMgr {
           case 4: setPage(5); return;
           case 5:
             scrMgr.invertSpan(cursorIdx);
-            updateScreen();
+            scrMgr.updateScreen();
             save();
             delay(500);
             scrMgr.invertSpan(cursorIdx);
-            updateScreen();
+            scrMgr.updateScreen();
             //reboot();
             //cursorIdx = getConfigMenuBounds(0)[0];
             return;
@@ -960,11 +960,11 @@ struct ConfigUIMgr {
           case 6: setPage(0, 4); return;
           case 7:
             scrMgr.invertSpan(cursorIdx);
-            updateScreen();
+            scrMgr.updateScreen();
             delay(500);
             factoryReset();
             setPage(0);
-            updateScreen();
+            scrMgr.updateScreen();
             return;
         }
         return;
