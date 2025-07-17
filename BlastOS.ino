@@ -15,9 +15,7 @@ Table of Contents (use ctrl-f):
 //#define CTWI_USING_BLOCKING_ACCESS
 
 #include <Servo.h>  // PWM output to ESC's
-#include <nI2C.h>   // Screen
-//#include <type_traits>
-//#include <avr/pgmspace.h>
+#include <nI2C.h>   // Screen - https://github.com/nitacku/nI2C
 #include <EEPROM.h>  // Save/load profiles
 /*
 todo:
