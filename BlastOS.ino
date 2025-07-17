@@ -73,7 +73,6 @@ struct Debounceable {
 struct StaticParams {  // not exposed to config yet
   uint16_t minPerCell = 360;
   uint16_t maxPerCell = 420;
-  bool enableDecay = true;
   bool enableVoltageSafetyLockout = false;
 };
 struct GlobalParams {
@@ -120,6 +119,7 @@ struct GlobalState {
   bool isBootConfigLockout = false;
   float calcdFracVelMultiplier[3];
   float calcdDecayConstant;
+  bool enableDecay = true;
 };
 struct Haptic {
   unsigned long startTime = 0;
@@ -463,7 +463,7 @@ struct ScreenMgr {
   void setSprite(uint8_t sprite, uint8_t row, uint8_t col) {
     setTileMapAt(sprite, row, col);
   }
-  void invertSpan(uint8_t row, uint8_t col = 0, uint8_t span = COL_LAST) {
+  void invertSpan(uint8_t row, uint8_t col = 0, uint8_t span = COL_COUNT) {
     // clamp span so col+span ≤ 16
     if (col > COL_LAST) col = COL_LAST;
     if (row > ROW_LAST) row = ROW_LAST;
@@ -584,6 +584,10 @@ char* voltageToText(uint16_t voltage,
   }
   return &buf[pos];
 }
+char* decayConstantText(uint16_t num, uint8_t minWidth) {
+  if (num == UINT16_MAX) return "Off ";
+  else return numToText(num, minWidth);
+}
 struct StatusUIMgr {
   ScreenMgr& scrMgr;
   GlobalParams& globalParams;
@@ -665,8 +669,8 @@ static const char configMenuTexts[CONFIG_PAGE_COUNT][ROW_COUNT][COL_COUNT + 1] P
     " Max DPS: ??    ",
     " Noid Time: ??ms",
     " CellCount: ?   ",
-    " Coasting: ???  ",  //  < 0%, 80-99.5% or now, simple integer typically between 3-4 digits, higher for faster decay
-    " AfterRev:    MS",  //
+    " Coasting: ???  ",  //  < constant for coasting speed computation
+    " AfterRev:    ms",  //
     " Comp Lock: ??? ",  // P?: ???? // "RevOffTimeS: ???", // < max 1s",
   },
   {
@@ -761,7 +765,7 @@ uint8_t simpleWrap(uint8_t val, int8_t direction, uint8_t rangeMin, uint8_t rang
 }
 
 uint16_t simpleWrap(uint16_t val, int8_t direction, uint16_t rangeMin, uint16_t rangeMax, bool allowMaxWrap = false) {
-  if (val == UINT16_MAX) return direction ? rangeMin : rangeMax;
+  if (val == UINT16_MAX) return direction > 0 ? rangeMin : rangeMax;
   if (direction > 0) {
     if (val >= rangeMax) return allowMaxWrap ? UINT16_MAX : rangeMin;
     else return constrain(val + direction, rangeMin, rangeMax);
@@ -797,7 +801,7 @@ struct ConfigUIMgr {
         scrMgr.setText(numToText(globalParams.maxDPS, 2), 2, 10);
         scrMgr.setText(numToText(globalParams.noidOnTime, 2), 3, 12);
         scrMgr.setText(numToText(globalParams.cellCount, 1), 4, 12);
-        scrMgr.setText(numToText(globalParams.decayConstant, 3), 5, 11);
+        scrMgr.setText(decayConstantText(globalParams.decayConstant, 3), 5, 11);
         scrMgr.setText(numToText(globalParams.delayBeforeEndRev, 3), 6, 11);
         scrMgr.setText(getCompLockProfileText(globalParams.compLockProfile), 7, 12);
         break;
@@ -1000,8 +1004,8 @@ struct ConfigUIMgr {
             }
           case 5:
             {
-              uint8_t* useVal = static_cast<uint8_t*>(currentPropertyEdit);  //decayConstant
-              *useVal = simpleWrap(*useVal, dirMultiplier * 10, 200, 1000);  //val, dir, min, max
+              uint16_t* useVal = static_cast<uint16_t*>(currentPropertyEdit);  //decayConstant
+              *useVal = simpleWrap(*useVal, dirMultiplier * 25, 200, 1000, true);  //val, dir, min, max;
               break;
             }
           case 6:
@@ -1065,7 +1069,7 @@ struct ConfigUIMgr {
   void factoryReset() {
     Serial.println("factory reset");
     for (int i = 0; i < EEPROM.length(); i++) {
-      EEPROM.put(i, 255);
+      if (EEPROM.read(i) != 255) EEPROM.write(i, 255);
     }
     resetUserParamsToDefault();
   }
@@ -1184,6 +1188,7 @@ void initCalcdParam(uint16_t param, float multiplier) {
 }
 void initCalcdDecayConstant() {
   globalState.calcdDecayConstant = float(globalParams.decayConstant) * 0.001f;
+  globalState.enableDecay = (globalParams.decayConstant == UINT16_MAX);
 }
 void initFracVelMultiplier() {
   for (uint8_t i = 0; i < 3; i++) {
@@ -1319,7 +1324,7 @@ uint16_t getRevLogic(bool isMenuPressed, bool revOrTrigIsActive) {  // Return in
     else currentTargetSpeed = globalState.targetVelocity;
     currentRevSpeed = currentTargetSpeed;
   } else {
-    if (globalState.isStealthModeEnabled || !staticParams.enableDecay) {
+    if (globalState.isStealthModeEnabled || !globalState.enableDecay) {
       lastReleaseTime = REF_TIME_MS;
       currentRevSpeed = WHEELMINSPEED;
     } else {
