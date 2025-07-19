@@ -1,6 +1,6 @@
 /*
 
-BlastOS v0.1 for brushless+solenoid flywheel blasters, based off TagBot Revision 000
+BlastOS for brushless+solenoid flywheel blasters, based off TagBot Revision 000
 By m0useCat
 
 Table of Contents (use ctrl-f):
@@ -26,14 +26,16 @@ implement config UI
 // Input
 #define PINREV 11
 #define PINTRIG 12
-#define PINSELECT1 A0
-#define PINSELECT2 A1
+#define PINSELECTFRONT A0 // Slideswitch Front Position
+#define PINSELECTBACK A1 // Slideswitch Back Position
 #define PINMENU A2
 #define PINVOLTAGE A3
 // Output
 #define PINESC 8
 #define PINPUSHER 10  //10 USE PIN 10 FOR IMPLEMENTATION, 13 IS FOR LED DEBUGGING. PIN 13 WILL ACTUATE THE NOID ON POWERUP, POSSIBLY CAUSING JAMS.
 //#define PINPUSHER 10
+// SDA: A4 (Often Blue)
+// SCL: A5 (Often Yellow)
 // Other Params
 #define WHEELMINSPEED 1000
 #define WHEELMAXSPEED 2000
@@ -1108,8 +1110,8 @@ StatusUIMgr StatusUI{ scrMgr, globalParams, firingProfiles, globalState };
 ConfigUIMgr ConfigUI{ scrMgr, globalParams, firingProfiles, globalState, bootVelocities };
 
 uint8_t getSelectorIndex() {
-  if (getDigitalPin(PINSELECT1)) return 1;
-  if (getDigitalPin(PINSELECT2)) return 2;
+  if (getDigitalPin(PINSELECTFRONT)) return 1;
+  if (getDigitalPin(PINSELECTBACK)) return 2;
   return 0;
 }
 
@@ -1225,8 +1227,8 @@ void assignPins() {
   // Pin config
   pinMode(PINREV, INPUT_PULLUP);
   pinMode(PINTRIG, INPUT_PULLUP);
-  pinMode(PINSELECT1, INPUT_PULLUP);
-  pinMode(PINSELECT2, INPUT_PULLUP);
+  pinMode(PINSELECTFRONT, INPUT_PULLUP);
+  pinMode(PINSELECTBACK, INPUT_PULLUP);
   pinMode(PINMENU, INPUT_PULLUP);
   pinMode(PINVOLTAGE, INPUT);
   pinMode(PINESC, OUTPUT);
@@ -1235,8 +1237,8 @@ void assignPins() {
 
 UseBootMode getBootModeIdx() {
   if (getDigitalPin(PINMENU)) return UseBootMode::BOOTCONFIG;
-  if (getDigitalPin(PINSELECT1)) return UseBootMode::BOOTFRONT;
-  if (getDigitalPin(PINSELECT2)) return UseBootMode::BOOTBACK;
+  if (getDigitalPin(PINSELECTFRONT)) return UseBootMode::BOOTFRONT;
+  if (getDigitalPin(PINSELECTBACK)) return UseBootMode::BOOTBACK;
   return UseBootMode::BOOTMID;
   //return UseBootMode::BOOTCONFIG;
 }
@@ -1427,7 +1429,6 @@ void bootConfigLoop() {
   static bool previousIsMenuPressed = getDigitalPin(PINMENU);
   bool isMenuPressed = getDigitalPin(PINMENU);
   if (isMenuPressed != previousIsMenuPressed) {
-    //uint8_t selectorIdx = getSelectorIndex();
     if (isMenuPressed) {
       if (debounceableMenu.isDebounced()) {
         if (haptic.allowAction()) {
