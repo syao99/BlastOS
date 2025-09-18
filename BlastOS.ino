@@ -79,8 +79,8 @@ struct GlobalParams {
   uint8_t maxDPS = 20;
   uint8_t noidOnTime = 35;
   uint8_t compLockProfile = 0;  // 0 disabled, 1/2/3 for corresponding profiles
-  uint8_t cellCount = 4;
-  uint16_t decayConstant = 600;
+  uint8_t cellCount = 3;
+  uint16_t decayConstant = UINT16_MAX; // 600
   uint16_t delayBeforeEndRev = 100;
   GlobalParams() {}
 };
@@ -90,7 +90,7 @@ struct ProfileParams {
   uint8_t firingMode;  // 0: safe, 1: semi, 2-254: burst, 255: auto
   //bool leftyMode = false;
   ProfileParams(
-    uint8_t DPS = 20,
+    uint8_t DPS = 15,
     uint8_t fvMultiplier = 50,
     uint8_t mode = 3  //,
     //bool left = false
@@ -1088,11 +1088,11 @@ const ProfileParams defaultFiringProfiles[] = {
   { ProfileParams(defaultGlobalParams.maxDPS, 50, 1) },
   { ProfileParams(defaultGlobalParams.maxDPS, 50, 255) },
 };
-const uint16_t defaultBootVelocities[] = { 1600, 1450, 2000 };
+const uint16_t defaultBootVelocities[] = { 1600, 1150, 1800 };
 
 GlobalParams globalParams;
 ProfileParams firingProfiles[3] = defaultFiringProfiles;
-uint16_t bootVelocities[3] = { 1600, 1450, 2000 };
+uint16_t bootVelocities[3] = { 1600, 1150, 1800 };
 
 ProfileParams configFiringProfile = ProfileParams(globalParams.maxDPS, 50, 1);
 
